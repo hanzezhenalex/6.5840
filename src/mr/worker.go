@@ -1,0 +1,153 @@
+package mr
+
+import (
+	"fmt"
+	"go.uber.org/zap"
+	"time"
+)
+import "log"
+import "net/rpc"
+
+// Map functions return a slice of KeyValue.
+type KeyValue struct {
+	Key   string
+	Value string
+}
+
+// main/mrworker.go calls this function.
+func Worker(mapf func(string, string) []KeyValue,
+	reducef func(string, []string) string) {
+
+	param := &RPCParam{}
+	worker := &worker{
+		store:   NewJsonStore(""),
+		logger:  GetLoggerOrPanic("worker"),
+		prefix:  fmt.Sprintf("%d", time.Now().Unix()),
+		mapf:    mapf,
+		reducef: reducef,
+	}
+
+	worker.logger.Info("worker started")
+
+	for {
+		if call("Coordinator.RequestJob", param, param) == false {
+			worker.logger.Error("fail to call RPC")
+			break
+		}
+
+		switch param.Job.JobType {
+		case JobNoJob:
+			worker.logger.Info("no job, shutdown")
+			break
+		default:
+			output, err := worker.handle(param)
+			if err != nil {
+				param.Job.Status = StatusJobFailed
+				worker.logger.Error(
+					"fail to handle job",
+					zap.String("id", fmt.Sprintf("%s-%s", param.Job.BatchID, param.Job.ID)),
+					zap.Error(err),
+				)
+			} else {
+				worker.logger.Info(
+					"process succeed",
+					zap.String("id", fmt.Sprintf("%s-%s", param.Job.BatchID, param.Job.ID)),
+				)
+				param.Job.Status = StatusJobSucceed
+				param.Job.Output = output
+			}
+		}
+	}
+}
+
+// send an RPC request to the coordinator, wait for the response.
+// usually returns true.
+// returns false if something goes wrong.
+func call(rpcname string, args interface{}, reply interface{}) bool {
+	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
+	sockname := coordinatorSock()
+	c, err := rpc.DialHTTP("unix", sockname)
+	if err != nil {
+		log.Fatal("dialing:", err)
+	}
+	defer c.Close()
+
+	err = c.Call(rpcname, args, reply)
+	if err == nil {
+		return true
+	}
+
+	fmt.Println(err)
+	return false
+}
+
+type worker struct {
+	count      int
+	prefix     string
+	instanceId int32
+	store      JsonStore
+	logger     *zap.Logger
+
+	mapf    func(string, string) []KeyValue
+	reducef func(string, []string) string
+}
+
+func (w *worker) validate(param *RPCParam) error {
+	if param.Job.Status != StatusJobDelivery {
+		return fmt.Errorf("incorrect job status, got %s", param.Job.Status)
+	}
+	w.instanceId = param.InstanceID
+	w.count++
+	return nil
+}
+
+func (w *worker) filepath(job *Job) string {
+	return fmt.Sprintf("%d-%d-(%s-%s-%s)", w.instanceId, w.count, job.JobType, job.BatchID, job.ID)
+}
+
+func (w *worker) handle(param *RPCParam) (string, error) {
+	if err := w.validate(param); err != nil {
+		return "", fmt.Errorf("fail to validate param, %w", err)
+	}
+
+	switch param.Job.JobType {
+	case JobMap:
+		return w.handleMapJob(param)
+	case JobReduce:
+		return w.handleReduceJob(param)
+	default:
+		return "", fmt.Errorf("unknown job type, got %s", param.Job.JobType)
+	}
+}
+
+func (w *worker) handleMapJob(param *RPCParam) (string, error) {
+	input := param.Job.JobDesc.Input
+
+	raw, err := w.store.readFile(param.Job.Input)
+	if err != nil {
+		return "", fmt.Errorf("fail to read input, %w", err)
+	}
+
+	kvs := w.mapf(input, string(raw))
+	output := w.filepath(param.Job)
+	if err := w.store.StoreKV(output, kvs); err != nil {
+		return "", fmt.Errorf("fail to store kv, %w", err)
+	}
+	return output, nil
+}
+
+func (w *worker) handleReduceJob(param *RPCParam) (string, error) {
+	input := param.Job.JobDesc.Input
+
+	raw, err := w.store.RetrieveShuffling(input)
+	if err != nil {
+		return "", fmt.Errorf("fail to read input, %w", err)
+	}
+
+	result := w.reducef(raw.Key, raw.Values)
+	output := w.filepath(param.Job)
+	if err := w.store.StoreKV(output, []KeyValue{{Key: raw.Key, Value: result}}); err != nil {
+		return "", fmt.Errorf("fail to store output, %w", err)
+	}
+	return output, nil
+}
