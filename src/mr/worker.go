@@ -42,6 +42,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			return
 		}
 
+		time.Sleep(500 * time.Millisecond)
 		switch param.Job.JobType {
 		case JobNoJob:
 			worker.logger.Info("no job, shutdown")
