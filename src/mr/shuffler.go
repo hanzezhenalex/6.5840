@@ -2,10 +2,8 @@ package mr
 
 import (
 	"fmt"
-	"strings"
-	"time"
-
 	"go.uber.org/zap"
+	"strings"
 )
 
 type Shuffler interface {
@@ -19,6 +17,7 @@ const (
 
 type InMemoryShuffler struct {
 	cnt     int
+	batchID string
 	results map[string]*ShuffleResult
 	outputs []string
 
@@ -26,10 +25,11 @@ type InMemoryShuffler struct {
 	logger *zap.Logger
 }
 
-func NewInMemoryShuffler(folder string) (*InMemoryShuffler, error) {
+func NewInMemoryShuffler(batchID, folder string) (*InMemoryShuffler, error) {
 	shuffler := &InMemoryShuffler{
 		results: make(map[string]*ShuffleResult),
 		storer:  NewJsonStore(folder),
+		batchID: batchID,
 	}
 	if err := shuffler.initLogger(); err != nil {
 		return nil, fmt.Errorf("fail to init logger, %w", err)
@@ -64,7 +64,7 @@ func (ims *InMemoryShuffler) Shuffle(inputs []string) ([]string, error) {
 
 func (ims *InMemoryShuffler) newOutputPath() string {
 	ims.cnt++
-	output := fmt.Sprintf("%s-%d-%d.json", shuffleFilePrefix, time.Now().Unix(), ims.cnt)
+	output := fmt.Sprintf("%s-%s-%d.json", shuffleFilePrefix, ims.batchID, ims.cnt)
 	ims.outputs = append(ims.outputs, output)
 	return output
 }

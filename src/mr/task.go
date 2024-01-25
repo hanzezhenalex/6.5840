@@ -32,9 +32,9 @@ type inmemoryBatch struct {
 	pending    []*Record
 }
 
-func newBatch(id int, redeliverInterval time.Duration, req *requestPutBatch) (*inmemoryBatch, error) {
+func newBatch(id string, redeliverInterval time.Duration, req *requestPutBatch) (*inmemoryBatch, error) {
 	batch := &inmemoryBatch{
-		id:                fmt.Sprintf("%d", id),
+		id:                id,
 		completed:         make(map[string]interface{}),
 		redeliverInterval: redeliverInterval,
 	}
@@ -210,7 +210,6 @@ type reportTaskStatus struct {
 }
 
 type singleBatchManager struct {
-	nextBatchID       int
 	currentBatch      *inmemoryBatch
 	redeliverInterval time.Duration
 	logger            *zap.Logger
@@ -353,8 +352,7 @@ LOOP:
 }
 
 func (mngr *singleBatchManager) createNewBatch(req *requestPutBatch) {
-	batch, err := newBatch(mngr.nextBatchID, mngr.redeliverInterval, req)
-	mngr.nextBatchID++
+	batch, err := newBatch(fmt.Sprintf("%d", time.Now().Unix()), mngr.redeliverInterval, req)
 
 	if err != nil {
 		mngr.logger.Error("fail to create new batch", zap.Error(err))

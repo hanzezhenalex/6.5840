@@ -47,7 +47,6 @@ type Coordinator struct {
 	logger         *zap.Logger
 
 	taskMngr BatchTaskManager
-	shuffler Shuffler
 
 	reqeustCh chan *requestNewJob
 	reportCh  chan *Job
@@ -147,7 +146,11 @@ func (c *Coordinator) run(input []string) {
 	}
 
 	c.setStage(stageShuffling)
-	outputs, err = c.shuffler.Shuffle(outputs)
+	shuffler, err := NewInMemoryShuffler(mapBatch.id, "")
+	if err != nil {
+		panic(fmt.Errorf("fail to create shuffler: %w", err))
+	}
+	outputs, err = shuffler.Shuffle(outputs)
 	if err != nil {
 		panic(err)
 	}
@@ -215,12 +218,6 @@ func MakeCoordinator(files []string, _ int) *Coordinator {
 		panic(fmt.Errorf("fail to get base logger: %w", err))
 	}
 	c.logger = logger.With(zap.String(LoggerComponent, "coordinator"))
-
-	shuffler, err := NewInMemoryShuffler("")
-	if err != nil {
-		panic(fmt.Errorf("fail to create shuffler: %w", err))
-	}
-	c.shuffler = shuffler
 
 	go c.run(files)
 	c.server()
