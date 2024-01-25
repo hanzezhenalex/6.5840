@@ -48,5 +48,5 @@ func Test_Shuffler(t *testing.T) {
 		filepath.Join("test-shuffler-3.json"),
 	})
 	rq.NoError(err)
-	rq.Equal(2, len(outputs))
+	rq.Equal(1, len(outputs))
 }

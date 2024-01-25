@@ -18,11 +18,12 @@ const (
 )
 
 type InMemoryShuffler struct {
-	cnt int
-
-	storer  JsonStore
+	cnt     int
 	results map[string]*ShuffleResult
-	logger  *zap.Logger
+	outputs []string
+
+	storer JsonStore
+	logger *zap.Logger
 }
 
 func NewInMemoryShuffler(folder string) (*InMemoryShuffler, error) {
@@ -64,6 +65,7 @@ func (ims *InMemoryShuffler) Shuffle(inputs []string) ([]string, error) {
 func (ims *InMemoryShuffler) newOutputPath() string {
 	ims.cnt++
 	output := fmt.Sprintf("%s-%d-%d.json", shuffleFilePrefix, time.Now().Unix(), ims.cnt)
+	ims.outputs = append(ims.outputs, output)
 	return output
 }
 
@@ -88,24 +90,28 @@ func (ims *InMemoryShuffler) shuffle(input string) error {
 
 func (ims *InMemoryShuffler) storeShuffleBatch() ([]string, error) {
 	var (
-		batch   []*ShuffleResult
-		output  string
-		outputs []string
+		batch  []*ShuffleResult
+		output string
 	)
+
+	store := func() error {
+		ims.logger.Debug(
+			"store shuffle",
+			zap.String("output", output),
+		)
+		if err := ims.storer.StoreShufflingBatch(output, batch); err != nil {
+			return fmt.Errorf("fail to store shuffling, %w", err)
+		}
+		return nil
+	}
 
 	for _, res := range ims.results {
 		if output == "" {
 			output = ims.newOutputPath()
-			outputs = append(outputs, output)
 		}
 		if len(batch) >= maxShuffleItems {
-			ims.logger.Debug(
-				"store shuffle",
-				zap.String("key", res.Key),
-				zap.String("output", output),
-			)
-			if err := ims.storer.StoreShufflingBatch(output, batch); err != nil {
-				return nil, fmt.Errorf("fail to store shuffling, %w", err)
+			if err := store(); err != nil {
+				return nil, err
 			}
 			output = ""
 			batch = batch[:0]
@@ -113,6 +119,12 @@ func (ims *InMemoryShuffler) storeShuffleBatch() ([]string, error) {
 		batch = append(batch, res)
 	}
 
+	if len(batch) > 0 {
+		if err := store(); err != nil {
+			return nil, err
+		}
+	}
+
 	ims.logger.Info("store successfully")
-	return outputs, nil
+	return ims.outputs, nil
 }
