@@ -17,6 +17,7 @@ type KeyValue struct {
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	RegisterGobStruct()
 
 	param := &RPCParam{}
 	worker := &worker{

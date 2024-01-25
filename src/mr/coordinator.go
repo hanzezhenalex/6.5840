@@ -55,6 +55,7 @@ type Coordinator struct {
 
 // server start a thread that listens for RPCs from worker.go
 func (c *Coordinator) server() {
+	RegisterGobStruct()
 	if err := rpc.Register(c); err != nil {
 		panic(err)
 	}

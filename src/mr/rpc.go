@@ -1,5 +1,7 @@
 package mr
 
+import "encoding/gob"
+
 //
 // RPC definitions.
 //
@@ -44,3 +46,10 @@ type RPCParam struct {
 }
 
 const Port = "9001"
+
+func RegisterGobStruct() {
+	gob.Register(JobDesc{})
+	gob.Register(Task{})
+	gob.Register(TaskHeader{})
+	gob.Register(Job{})
+}
