@@ -86,7 +86,7 @@ func (c *Coordinator) setStage(stage workingStage) {
 	atomic.StoreInt32((*int32)(&c.stage), int32(stage))
 }
 
-func (c *Coordinator) RequestJob(args *RequestJobArgs, reply *RequestJobReply) {
+func (c *Coordinator) RequestJob(args *RequestJobArgs, reply *RequestJobReply) error {
 	if args.InstanceID != -1 {
 		c.onboardNewInstance(reply)
 	} else {
@@ -109,6 +109,7 @@ func (c *Coordinator) RequestJob(args *RequestJobArgs, reply *RequestJobReply) {
 		reply.Job.TaskHeader = task.TaskHeader
 		reply.Job.JobDesc = task.Desc.(JobDesc)
 	}
+	return nil
 }
 
 func (c *Coordinator) onboardNewInstance(reply *RequestJobReply) {
