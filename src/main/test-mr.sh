@@ -7,6 +7,8 @@
 # un-comment this to run the tests with the Go race detector.
 # RACE=-race
 
+export MR_PROD="true"
+
 if [[ "$OSTYPE" = "darwin"* ]]
 then
   if go version | grep 'go1.17.[012345]'
@@ -295,22 +297,19 @@ sleep 1
 # start multiple workers
 maybe_quiet $TIMEOUT2 ../mrworker ../../mrapps/crash.so &
 
-# mimic rpc.go's coordinatorSock()
-SOCKNAME=/var/tmp/5840-mr-`id -u`
-
-( while [ -e $SOCKNAME -a ! -f mr-done ]
+( while [ ! -f mr-done ]
   do
     maybe_quiet $TIMEOUT2 ../mrworker ../../mrapps/crash.so
     sleep 1
   done ) &
 
-( while [ -e $SOCKNAME -a ! -f mr-done ]
+( while [ ! -f mr-done ]
   do
     maybe_quiet $TIMEOUT2 ../mrworker ../../mrapps/crash.so
     sleep 1
   done ) &
 
-while [ -e $SOCKNAME -a ! -f mr-done ]
+while [ ! -f mr-done ]
 do
   maybe_quiet $TIMEOUT2 ../mrworker ../../mrapps/crash.so
   sleep 1
@@ -318,7 +317,6 @@ done
 
 wait
 
-rm $SOCKNAME
 sort mr-out* | grep . > mr-crash-all
 if cmp mr-crash-all mr-correct-crash.txt
 then

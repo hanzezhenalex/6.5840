@@ -47,18 +47,23 @@ func Worker(mapf func(string, string) []KeyValue,
 			worker.logger.Info("no job, shutdown")
 			return
 		default:
+			worker.logger.Info(
+				"receive a new job",
+				zap.String("type", string(param.Job.JobType)),
+				zap.String("id", fmt.Sprintf("%s || %s", param.Job.BatchID, param.Job.ID)),
+			)
 			output, err := worker.handle(param)
 			if err != nil {
 				param.Job.Status = StatusJobFailed
 				worker.logger.Error(
 					"fail to handle job",
-					zap.String("id", fmt.Sprintf("%s-%s", param.Job.BatchID, param.Job.ID)),
+					zap.String("id", fmt.Sprintf("%s || %s", param.Job.BatchID, param.Job.ID)),
 					zap.Error(err),
 				)
 			} else {
 				worker.logger.Info(
 					"process succeed",
-					zap.String("id", fmt.Sprintf("%s-%s", param.Job.BatchID, param.Job.ID)),
+					zap.String("id", fmt.Sprintf("%s || %s", param.Job.BatchID, param.Job.ID)),
 				)
 				param.Job.Status = StatusJobSucceed
 				param.Job.Output = output
@@ -143,6 +148,7 @@ func (w *worker) handleMapJob(param *RPCParam) (string, error) {
 
 func (w *worker) handleReduceJob(param *RPCParam) (string, error) {
 	input := param.Job.JobDesc.Input
+	w.logger.Debug("handling reduce job", zap.String("input", input))
 
 	rets, err := w.store.RetrieveShufflingBatch(input)
 	if err != nil {
@@ -150,16 +156,31 @@ func (w *worker) handleReduceJob(param *RPCParam) (string, error) {
 	}
 
 	var reduceResults []KeyValue
-	for _, ret := range rets {
+	w.logProcess(rets, func(task *ShuffleResult) {
 		reduceResults = append(reduceResults, KeyValue{
-			Key:   ret.Key,
-			Value: w.reducef(ret.Key, ret.Values),
+			Key:   task.Key,
+			Value: w.reducef(task.Key, task.Values),
 		})
-	}
+	})
 
 	output := w.filename(param.Job)
 	if err := w.store.StoreKV(output, reduceResults); err != nil {
 		return "", fmt.Errorf("fail to store output, %w", err)
 	}
 	return output, nil
+}
+
+func (w *worker) logProcess(tasks []*ShuffleResult, fn func(task *ShuffleResult)) {
+	w.logger.Debug("tasks details", zap.Int("len", len(tasks)))
+
+	total := len(tasks)
+	percent := 1
+
+	for i, task := range tasks {
+		fn(task)
+		if i == percent*(total/5) {
+			percent++
+			w.logger.Debug(fmt.Sprintf("task is procossing, finished %d / %d", i, total))
+		}
+	}
 }

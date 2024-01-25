@@ -178,7 +178,7 @@ func (c *Coordinator) write(files []string) error {
 			return fmt.Errorf("fail to retrieve kv, file=%s, %w", file, err)
 		}
 		for _, kv := range kvs {
-			rets = append(rets, fmt.Sprintf("%s %s\r\n", kv.Key, kv.Value))
+			rets = append(rets, fmt.Sprintf("%s %s\n", kv.Key, kv.Value))
 		}
 	}
 
@@ -208,7 +208,7 @@ func MakeCoordinator(files []string, _ int) *Coordinator {
 		store:          NewJsonStore(""),
 		stage:          stagePending,
 		lastInstanceID: 0,
-		taskMngr:       NewInMemoryManager(10 * time.Second),
+		taskMngr:       NewInMemoryManager(20 * time.Second),
 		reqeustCh:      make(chan *requestNewJob),
 		reportCh:       make(chan *Job),
 	}

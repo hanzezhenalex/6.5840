@@ -341,7 +341,7 @@ LOOP:
 		if task == nil {
 			break LOOP
 		}
-		req := mngr.queue[0]
+		req := mngr.queue[nextDeliver]
 		req.ch <- task.copy()
 	}
 

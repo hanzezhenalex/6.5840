@@ -3,16 +3,11 @@ package mr
 import (
 	"fmt"
 	"go.uber.org/zap"
+	"os"
 )
 
-var production = false
-
-func SetProductionMode() {
-	production = true
-}
-
 func GetBaseLogger() (*zap.Logger, error) {
-	if production {
+	if os.Getenv("MR_PROD") == "true" {
 		cfg := zap.NewProductionConfig()
 		cfg.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
 		return cfg.Build()
