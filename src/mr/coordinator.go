@@ -86,7 +86,7 @@ func (c *Coordinator) setStage(stage workingStage) {
 	atomic.StoreInt32((*int32)(&c.stage), int32(stage))
 }
 
-func (c *Coordinator) RequestJob(args *RPCParam, reply *RPCParam) {
+func (c *Coordinator) RequestJob(args *RequestJobArgs, reply *RequestJobReply) {
 	if args.InstanceID != -1 {
 		c.onboardNewInstance(reply)
 	} else {
@@ -111,7 +111,7 @@ func (c *Coordinator) RequestJob(args *RPCParam, reply *RPCParam) {
 	}
 }
 
-func (c *Coordinator) onboardNewInstance(reply *RPCParam) {
+func (c *Coordinator) onboardNewInstance(reply *RequestJobReply) {
 	reply.InstanceID = atomic.AddInt32(&c.lastInstanceID, 1)
 }
 

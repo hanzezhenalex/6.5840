@@ -37,6 +37,9 @@ type Job struct {
 	Status JobStatus
 }
 
+type RequestJobArgs RPCParam
+type RequestJobReply RPCParam
+
 // RPCParam is for args & reply
 type RPCParam struct {
 	InstanceID int32

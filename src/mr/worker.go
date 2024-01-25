@@ -30,7 +30,11 @@ func Worker(mapf func(string, string) []KeyValue,
 	worker.logger.Info("worker started")
 
 	for {
-		if call("Coordinator.RequestJob", param, param) == false {
+		if call(
+			"Coordinator.RequestJob",
+			(*RequestJobArgs)(param),
+			(*RequestJobReply)(param),
+		) == false {
 			worker.logger.Error("fail to call RPC")
 			break
 		}
