@@ -106,8 +106,8 @@ func (w *worker) validate(param *RPCParam) error {
 	return nil
 }
 
-func (w *worker) filepath(job *Job) string {
-	return fmt.Sprintf("[%s-%s-%s]-%d-%d", job.JobType, job.BatchID, job.ID, w.instanceId, w.count)
+func (w *worker) filename(job *Job) string {
+	return fmt.Sprintf("%s_%s_%s_%d_%d.json", job.JobType, job.BatchID, job.ID, w.instanceId, w.count)
 }
 
 func (w *worker) handle(param *RPCParam) (string, error) {
@@ -134,7 +134,7 @@ func (w *worker) handleMapJob(param *RPCParam) (string, error) {
 	}
 
 	kvs := w.mapf(input, string(raw))
-	output := w.filepath(param.Job)
+	output := w.filename(param.Job)
 	if err := w.store.StoreKV(output, kvs); err != nil {
 		return "", fmt.Errorf("fail to store kv, %w", err)
 	}
@@ -150,7 +150,7 @@ func (w *worker) handleReduceJob(param *RPCParam) (string, error) {
 	}
 
 	result := w.reducef(raw.Key, raw.Values)
-	output := w.filepath(param.Job)
+	output := w.filename(param.Job)
 	if err := w.store.StoreKV(output, []KeyValue{{Key: raw.Key, Value: result}}); err != nil {
 		return "", fmt.Errorf("fail to store output, %w", err)
 	}

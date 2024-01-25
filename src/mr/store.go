@@ -17,15 +17,15 @@ func NewJsonStore(folder string) JsonStore {
 }
 
 func (store JsonStore) path(filename string) string {
-	return filepath.Join(store.folder, fmt.Sprintf("%s.json", filename))
+	return filepath.Join(store.folder, filename)
 }
 
-func (store JsonStore) readFile(file string) ([]byte, error) {
-	return ioutil.ReadFile(store.path(file))
+func (store JsonStore) readFile(filename string) ([]byte, error) {
+	return ioutil.ReadFile(store.path(filename))
 }
 
-func (store JsonStore) StoreKV(file string, kv []KeyValue) error {
-	f, err := os.Create(store.path(file))
+func (store JsonStore) StoreKV(filename string, kv []KeyValue) error {
+	f, err := os.Create(store.path(filename))
 	if err != nil {
 		return fmt.Errorf("fail to create file, %w", err)
 	}
@@ -37,10 +37,10 @@ func (store JsonStore) StoreKV(file string, kv []KeyValue) error {
 	return nil
 }
 
-func (store JsonStore) RetrieveKV(file string) ([]KeyValue, error) {
+func (store JsonStore) RetrieveKV(filename string) ([]KeyValue, error) {
 	var ret []KeyValue
 
-	f, err := os.Open(store.path(file))
+	f, err := os.Open(store.path(filename))
 	if err != nil {
 		return nil, fmt.Errorf("fail to open file, %w", err)
 	}
@@ -57,8 +57,8 @@ type ShuffleResult struct {
 	Values []string
 }
 
-func (store JsonStore) StoreShuffling(file string, result *ShuffleResult) error {
-	f, err := os.Create(store.path(file))
+func (store JsonStore) StoreShuffling(filename string, result *ShuffleResult) error {
+	f, err := os.Create(store.path(filename))
 	if err != nil {
 		return fmt.Errorf("fail to open file, %w", err)
 	}
@@ -70,10 +70,10 @@ func (store JsonStore) StoreShuffling(file string, result *ShuffleResult) error 
 	return nil
 }
 
-func (store JsonStore) RetrieveShuffling(file string) (*ShuffleResult, error) {
+func (store JsonStore) RetrieveShuffling(filename string) (*ShuffleResult, error) {
 	var ret ShuffleResult
 
-	f, err := os.Open(store.path(file))
+	f, err := os.Open(store.path(filename))
 	if err != nil {
 		return nil, fmt.Errorf("fail to open file, %w", err)
 	}
