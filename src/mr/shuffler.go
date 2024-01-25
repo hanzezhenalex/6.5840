@@ -12,11 +12,13 @@ type Shuffler interface {
 	Shuffle(inputs []string) ([]string, error)
 }
 
-const shuffleFilePrefix = "shuffle"
+const (
+	shuffleFilePrefix = "shuffle"
+	maxShuffleItems   = 2000
+)
 
 type InMemoryShuffler struct {
-	cnt     int
-	outputs []string
+	cnt int
 
 	storer  JsonStore
 	results map[string]*ShuffleResult
@@ -56,22 +58,12 @@ func (ims *InMemoryShuffler) Shuffle(inputs []string) ([]string, error) {
 	}
 
 	ims.logger.Info("shuffle success, store now", zap.Int("len", len(ims.results)))
-	for _, res := range ims.results {
-		output := ims.newOutputPath()
-		ims.logger.Debug("store shuffle", zap.String("key", res.Key), zap.String("output", output))
-		if err := ims.storer.StoreShuffling(output, res); err != nil {
-			return nil, fmt.Errorf("fail to store shuffling, %w", err)
-		}
-	}
-
-	ims.logger.Info("store successfully")
-	return ims.outputs, nil
+	return ims.storeShuffleBatch()
 }
 
 func (ims *InMemoryShuffler) newOutputPath() string {
 	ims.cnt++
 	output := fmt.Sprintf("%s-%d-%d.json", shuffleFilePrefix, time.Now().Unix(), ims.cnt)
-	ims.outputs = append(ims.outputs, output)
 	return output
 }
 
@@ -92,4 +84,35 @@ func (ims *InMemoryShuffler) shuffle(input string) error {
 		result.Values = append(result.Values, kv.Value)
 	}
 	return nil
+}
+
+func (ims *InMemoryShuffler) storeShuffleBatch() ([]string, error) {
+	var (
+		batch   []*ShuffleResult
+		output  string
+		outputs []string
+	)
+
+	for _, res := range ims.results {
+		if output == "" {
+			output = ims.newOutputPath()
+			outputs = append(outputs, output)
+		}
+		if len(batch) >= maxShuffleItems {
+			ims.logger.Debug(
+				"store shuffle",
+				zap.String("key", res.Key),
+				zap.String("output", output),
+			)
+			if err := ims.storer.StoreShufflingBatch(output, batch); err != nil {
+				return nil, fmt.Errorf("fail to store shuffling, %w", err)
+			}
+			output = ""
+			batch = batch[:0]
+		}
+		batch = append(batch, res)
+	}
+
+	ims.logger.Info("store successfully")
+	return outputs, nil
 }

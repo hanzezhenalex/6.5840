@@ -144,14 +144,21 @@ func (w *worker) handleMapJob(param *RPCParam) (string, error) {
 func (w *worker) handleReduceJob(param *RPCParam) (string, error) {
 	input := param.Job.JobDesc.Input
 
-	raw, err := w.store.RetrieveShuffling(input)
+	rets, err := w.store.RetrieveShufflingBatch(input)
 	if err != nil {
 		return "", fmt.Errorf("fail to read input, %w", err)
 	}
 
-	result := w.reducef(raw.Key, raw.Values)
+	var reduceResults []KeyValue
+	for _, ret := range rets {
+		reduceResults = append(reduceResults, KeyValue{
+			Key:   ret.Key,
+			Value: w.reducef(ret.Key, ret.Values),
+		})
+	}
+
 	output := w.filename(param.Job)
-	if err := w.store.StoreKV(output, []KeyValue{{Key: raw.Key, Value: result}}); err != nil {
+	if err := w.store.StoreKV(output, reduceResults); err != nil {
 		return "", fmt.Errorf("fail to store output, %w", err)
 	}
 	return output, nil

@@ -169,11 +169,13 @@ func (c *Coordinator) run(input []string) {
 func (c *Coordinator) write(files []string) error {
 	var rets []string
 	for _, file := range files {
-		kv, err := c.store.RetrieveKV(file)
+		kvs, err := c.store.RetrieveKV(file)
 		if err != nil {
 			return fmt.Errorf("fail to retrieve kv, file=%s, %w", file, err)
 		}
-		rets = append(rets, fmt.Sprintf("%s %s\r\n", kv[0].Key, kv[0].Value))
+		for _, kv := range kvs {
+			rets = append(rets, fmt.Sprintf("%s %s\r\n", kv.Key, kv.Value))
+		}
 	}
 
 	sort.Slice(rets, func(i, j int) bool {

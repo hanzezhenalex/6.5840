@@ -57,7 +57,7 @@ type ShuffleResult struct {
 	Values []string
 }
 
-func (store JsonStore) StoreShuffling(filename string, result *ShuffleResult) error {
+func (store JsonStore) StoreShufflingBatch(filename string, result []*ShuffleResult) error {
 	f, err := os.Create(store.path(filename))
 	if err != nil {
 		return fmt.Errorf("fail to open file, %w", err)
@@ -70,8 +70,8 @@ func (store JsonStore) StoreShuffling(filename string, result *ShuffleResult) er
 	return nil
 }
 
-func (store JsonStore) RetrieveShuffling(filename string) (*ShuffleResult, error) {
-	var ret ShuffleResult
+func (store JsonStore) RetrieveShufflingBatch(filename string) ([]*ShuffleResult, error) {
+	var ret []*ShuffleResult
 
 	f, err := os.Open(store.path(filename))
 	if err != nil {
@@ -82,5 +82,5 @@ func (store JsonStore) RetrieveShuffling(filename string) (*ShuffleResult, error
 	if err := json.NewDecoder(f).Decode(&ret); err != nil {
 		return nil, err
 	}
-	return &ret, nil
+	return ret, nil
 }
