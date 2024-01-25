@@ -19,7 +19,9 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	RegisterGobStruct()
 
-	param := &RPCParam{}
+	param := &RPCParam{
+		InstanceID: InitInstanceID,
+	}
 	worker := &worker{
 		store:   NewJsonStore(""),
 		logger:  GetLoggerOrPanic("worker"),

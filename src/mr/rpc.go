@@ -45,7 +45,10 @@ type RPCParam struct {
 	Job        *Job
 }
 
-const Port = "9001"
+const (
+	Port           = "9001"
+	InitInstanceID = -1
+)
 
 func RegisterGobStruct() {
 	gob.Register(JobDesc{})

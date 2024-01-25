@@ -16,8 +16,8 @@ func NewJsonStore(folder string) JsonStore {
 	return JsonStore{folder: folder}
 }
 
-func (store JsonStore) path(path string) string {
-	return filepath.Join(store.folder, path)
+func (store JsonStore) path(filename string) string {
+	return filepath.Join(store.folder, fmt.Sprintf("%s.json", filename))
 }
 
 func (store JsonStore) readFile(file string) ([]byte, error) {

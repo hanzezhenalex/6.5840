@@ -87,7 +87,7 @@ func (c *Coordinator) setStage(stage workingStage) {
 }
 
 func (c *Coordinator) RequestJob(args *RequestJobArgs, reply *RequestJobReply) error {
-	if args.InstanceID != -1 {
+	if args.InstanceID == InitInstanceID {
 		c.onboardNewInstance(reply)
 	} else {
 		reply.InstanceID = args.InstanceID
