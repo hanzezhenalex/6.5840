@@ -100,6 +100,7 @@ func (c *Coordinator) RequestJob(args *RequestJobArgs, reply *RequestJobReply) e
 	}
 
 	task := c.taskMngr.Take()
+	reply.Job = args.Job
 	if task == nil {
 		reply.Job.Status = StatusJobDelivery
 		reply.Job.JobDesc.JobType = JobNoJob
