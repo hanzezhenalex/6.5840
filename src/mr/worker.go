@@ -39,13 +39,13 @@ func Worker(mapf func(string, string) []KeyValue,
 			(*RequestJobReply)(param),
 		) == false {
 			worker.logger.Error("fail to call RPC")
-			break
+			return
 		}
 
 		switch param.Job.JobType {
 		case JobNoJob:
 			worker.logger.Info("no job, shutdown")
-			break
+			return
 		default:
 			output, err := worker.handle(param)
 			if err != nil {

@@ -163,6 +163,7 @@ func (c *Coordinator) run(input []string) {
 		panic(err)
 	}
 
+	c.taskMngr.Close()
 	c.setStage(stageDone)
 }
 

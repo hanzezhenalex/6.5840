@@ -6,12 +6,21 @@ import (
 	"go.uber.org/zap"
 )
 
+var production = false
+
+func SetProductionMode() {
+	production = true
+}
+
 func GetBaseLogger() (*zap.Logger, error) {
+	if production {
+		return zap.NewProduction()
+	}
 	return zap.NewDevelopment()
 }
 
 func GetLogger(component string) (*zap.Logger, error) {
-	base, err := zap.NewDevelopment()
+	base, err := GetBaseLogger()
 	if err != nil {
 		return nil, fmt.Errorf("fail to get base logger, %w", err)
 	}
