@@ -2,7 +2,6 @@ package mr
 
 import (
 	"fmt"
-
 	"go.uber.org/zap"
 )
 
@@ -14,7 +13,9 @@ func SetProductionMode() {
 
 func GetBaseLogger() (*zap.Logger, error) {
 	if production {
-		return zap.NewProduction()
+		cfg := zap.NewProductionConfig()
+		cfg.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
+		return cfg.Build()
 	}
 	return zap.NewDevelopment()
 }
