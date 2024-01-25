@@ -100,14 +100,20 @@ func (c *Coordinator) RequestJob(args *RequestJobArgs, reply *RequestJobReply) e
 	}
 
 	task := c.taskMngr.Take()
-	reply.Job = args.Job
+
 	if task == nil {
-		reply.Job.Status = StatusJobDelivery
-		reply.Job.JobDesc.JobType = JobNoJob
+		reply.Job = &Job{
+			Status: StatusJobDelivery,
+			JobDesc: JobDesc{
+				JobType: JobNoJob,
+			},
+		}
 	} else {
-		reply.Job.Status = StatusJobDelivery
-		reply.Job.TaskHeader = task.TaskHeader
-		reply.Job.JobDesc = task.Desc.(JobDesc)
+		reply.Job = &Job{
+			Status:  StatusJobDelivery,
+			Task:    *task,
+			JobDesc: task.Desc.(JobDesc),
+		}
 	}
 	return nil
 }
