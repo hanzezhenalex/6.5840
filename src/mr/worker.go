@@ -102,7 +102,7 @@ func (w *worker) validate(param *RPCParam) error {
 }
 
 func (w *worker) filepath(job *Job) string {
-	return fmt.Sprintf("%d-%d-(%s-%s-%s)", w.instanceId, w.count, job.JobType, job.BatchID, job.ID)
+	return fmt.Sprintf("[%s-%s-%s]-%d-%d", job.JobType, job.BatchID, job.ID, w.instanceId, w.count)
 }
 
 func (w *worker) handle(param *RPCParam) (string, error) {

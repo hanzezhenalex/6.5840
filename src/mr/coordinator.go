@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go.uber.org/zap"
 	"log"
+	"sort"
 	"sync/atomic"
 	"time"
 )
@@ -158,19 +159,28 @@ func (c *Coordinator) run(input []string) {
 }
 
 func (c *Coordinator) write(files []string) error {
+	var rets []string
+	for _, file := range files {
+		kv, err := c.store.RetrieveKV(file)
+		if err != nil {
+			return fmt.Errorf("fail to retrieve kv, file=%s, %w", file, err)
+		}
+		rets = append(rets, fmt.Sprintf("%s %s\r\n", kv[0].Key, kv[0].Value))
+	}
+
+	sort.Slice(rets, func(i, j int) bool {
+		return rets[i] < rets[j]
+	})
+
 	f, err := os.Create("mr-out-1")
 	if err != nil {
 		return fmt.Errorf("fail to create mr-out, %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
-	for _, file := range files {
-		kv, err := c.store.RetrieveKV(file)
-		if err != nil {
-			return fmt.Errorf("fail to retrieve kv, file=%s, %w", file, err)
-		}
-		if _, err := f.WriteString(fmt.Sprintf("%s %s\r\n", kv[0].Key, kv[0].Value)); err != nil {
-			return fmt.Errorf("fail to write to mr-out, file=%s, %w", file, err)
+	for _, ret := range rets {
+		if _, err := f.WriteString(ret); err != nil {
+			return fmt.Errorf("fail to write to mr-out, content=%s, %w", ret, err)
 		}
 	}
 	return nil
