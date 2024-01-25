@@ -88,7 +88,9 @@ func (batch *inmemoryBatch) deliverPendingFront() *Task {
 	batch.processing = append(batch.processing, record)
 
 	batch.logger.Info("deliver from pending queue",
-		zap.String("task id", record.task.ID))
+		zap.String("task id", record.task.ID),
+		zap.Time("deliver at", record.deliverAt),
+	)
 	return record.task
 }
 
@@ -96,11 +98,17 @@ func (batch *inmemoryBatch) tryDeliverProcessingFront() *Task {
 	record := batch.processing[0]
 	now := time.Now()
 
-	if record.deliverAt.Add(batch.redeliverInterval).After(now) {
+	if record.deliverAt.Add(batch.redeliverInterval).Before(now) {
+		lastDeliverAt := record.deliverAt
 		record.deliverAt = now
 		batch.processing = append(batch.processing[1:], record)
+
 		batch.logger.Info("deliver one task from processing queue",
-			zap.String("task id", record.task.ID))
+			zap.String("task id", record.task.ID),
+			zap.Duration("redeliverInterval", batch.redeliverInterval),
+			zap.Time("last deliver at", lastDeliverAt),
+			zap.Time("redeliver at", record.deliverAt),
+		)
 		return record.task
 	}
 

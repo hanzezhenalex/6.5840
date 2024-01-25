@@ -208,7 +208,7 @@ func MakeCoordinator(files []string, _ int) *Coordinator {
 		store:          NewJsonStore(""),
 		stage:          stagePending,
 		lastInstanceID: 0,
-		taskMngr:       NewInMemoryManager(20 * time.Second),
+		taskMngr:       NewInMemoryManager(10 * time.Second),
 		reqeustCh:      make(chan *requestNewJob),
 		reportCh:       make(chan *Job),
 	}
