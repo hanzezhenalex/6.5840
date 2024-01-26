@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"bufio"
 	"fmt"
 	"go.uber.org/zap"
 	"log"
@@ -170,32 +171,27 @@ func (c *Coordinator) run(input []string) {
 }
 
 func (c *Coordinator) summarize(files []string) error {
-	var rets []string
-	for _, file := range files {
-		kvs, err := c.store.RetrieveKV(file)
-		if err != nil {
-			return fmt.Errorf("fail to retrieve kv, file=%s, %w", file, err)
-		}
-		for _, kv := range kvs {
-			rets = append(rets, fmt.Sprintf("%s %s\n", kv.Key, kv.Value))
-		}
-	}
-
-	//sort.Slice(rets, func(i, j int) bool {
-	//	return rets[i] < rets[j]
-	//})
-
 	f, err := os.Create("mr-out-1")
 	if err != nil {
 		return fmt.Errorf("fail to create mr-out, %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
-	for _, ret := range rets {
-		if _, err := f.WriteString(ret); err != nil {
-			return fmt.Errorf("fail to write to mr-out, content=%s, %w", ret, err)
+	writer := bufio.NewWriter(f)
+
+	for _, file := range files {
+		kvs, err := c.store.RetrieveKVBatch(file)
+		if err != nil {
+			return fmt.Errorf("fail to retrieve kv, file=%s, %w", file, err)
+		}
+		for _, kv := range kvs {
+			if _, err := writer.WriteString(fmt.Sprintf("%s %s\n", kv.Key, kv.Value)); err != nil {
+				return fmt.Errorf("fail to write to mr-out,  %w", err)
+			}
 		}
 	}
+
+	c.logger.Info("summarize finished")
 	return nil
 }
 

@@ -30,7 +30,7 @@ func Test_JsonStore(t *testing.T) {
 		}
 		rq.NoError(store.StoreKV(kvFile, expected))
 
-		actual, err := store.RetrieveKV(kvFile)
+		actual, err := store.RetrieveKVBatch(kvFile)
 		rq.NoError(err)
 		rq.EqualValues(expected, actual)
 	})

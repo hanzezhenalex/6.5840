@@ -64,7 +64,7 @@ func Test_worker(t *testing.T) {
 
 		rq.NoError(err)
 
-		kvs, err := worker.store.RetrieveKV(output)
+		kvs, err := worker.store.RetrieveKVBatch(output)
 		rq.NoError(err)
 		rq.Equal(1, len(kvs))
 	})
@@ -98,7 +98,7 @@ func Test_worker(t *testing.T) {
 
 		rq.NoError(err)
 
-		kvs, err := worker.store.RetrieveKV(output)
+		kvs, err := worker.store.RetrieveKVBatch(output)
 		rq.NoError(err)
 		rq.Equal(1, len(kvs))
 	})

@@ -70,7 +70,7 @@ func (ims *InMemoryShuffler) newOutputPath() string {
 }
 
 func (ims *InMemoryShuffler) shuffle(input string) error {
-	kvs, err := ims.storer.RetrieveKV(input)
+	kvs, err := ims.storer.RetrieveKVBatch(input)
 	if err != nil {
 		return fmt.Errorf("fail to retrieve kv from %s, err=%w", input, err)
 	}

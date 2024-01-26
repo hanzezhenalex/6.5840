@@ -37,7 +37,7 @@ func (store JsonStore) StoreKV(filename string, kv []KeyValue) error {
 	return nil
 }
 
-func (store JsonStore) RetrieveKV(filename string) ([]KeyValue, error) {
+func (store JsonStore) RetrieveKVBatch(filename string) ([]KeyValue, error) {
 	var ret []KeyValue
 
 	f, err := os.Open(store.path(filename))
