@@ -2,16 +2,21 @@ package mr
 
 import (
 	"fmt"
-
 	"go.uber.org/zap"
+	"os"
 )
 
 func GetBaseLogger() (*zap.Logger, error) {
+	if os.Getenv("MR_PROD") == "true" {
+		cfg := zap.NewProductionConfig()
+		cfg.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
+		return cfg.Build()
+	}
 	return zap.NewDevelopment()
 }
 
 func GetLogger(component string) (*zap.Logger, error) {
-	base, err := zap.NewDevelopment()
+	base, err := GetBaseLogger()
 	if err != nil {
 		return nil, fmt.Errorf("fail to get base logger, %w", err)
 	}

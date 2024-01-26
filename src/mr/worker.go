@@ -17,8 +17,11 @@ type KeyValue struct {
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	RegisterGobStruct()
 
-	param := &RPCParam{}
+	param := &RPCParam{
+		InstanceID: InitInstanceID,
+	}
 	worker := &worker{
 		store:   NewJsonStore(""),
 		logger:  GetLoggerOrPanic("worker"),
@@ -30,28 +33,37 @@ func Worker(mapf func(string, string) []KeyValue,
 	worker.logger.Info("worker started")
 
 	for {
-		if call("Coordinator.RequestJob", param, param) == false {
+		if call(
+			"Coordinator.RequestJob",
+			(*RequestJobArgs)(param),
+			(*RequestJobReply)(param),
+		) == false {
 			worker.logger.Error("fail to call RPC")
-			break
+			return
 		}
 
 		switch param.Job.JobType {
 		case JobNoJob:
 			worker.logger.Info("no job, shutdown")
-			break
+			return
 		default:
+			worker.logger.Info(
+				"receive a new job",
+				zap.String("type", string(param.Job.JobType)),
+				zap.String("id", fmt.Sprintf("%s || %s", param.Job.BatchID, param.Job.ID)),
+			)
 			output, err := worker.handle(param)
 			if err != nil {
 				param.Job.Status = StatusJobFailed
 				worker.logger.Error(
 					"fail to handle job",
-					zap.String("id", fmt.Sprintf("%s-%s", param.Job.BatchID, param.Job.ID)),
+					zap.String("id", fmt.Sprintf("%s || %s", param.Job.BatchID, param.Job.ID)),
 					zap.Error(err),
 				)
 			} else {
 				worker.logger.Info(
 					"process succeed",
-					zap.String("id", fmt.Sprintf("%s-%s", param.Job.BatchID, param.Job.ID)),
+					zap.String("id", fmt.Sprintf("%s || %s", param.Job.BatchID, param.Job.ID)),
 				)
 				param.Job.Status = StatusJobSucceed
 				param.Job.Output = output
@@ -64,13 +76,11 @@ func Worker(mapf func(string, string) []KeyValue,
 // usually returns true.
 // returns false if something goes wrong.
 func call(rpcname string, args interface{}, reply interface{}) bool {
-	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
-	sockname := coordinatorSock()
-	c, err := rpc.DialHTTP("unix", sockname)
+	c, err := rpc.DialHTTP("tcp", "127.0.0.1:"+Port)
 	if err != nil {
 		log.Fatal("dialing:", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	err = c.Call(rpcname, args, reply)
 	if err == nil {
@@ -101,8 +111,8 @@ func (w *worker) validate(param *RPCParam) error {
 	return nil
 }
 
-func (w *worker) filepath(job *Job) string {
-	return fmt.Sprintf("%d-%d-(%s-%s-%s)", w.instanceId, w.count, job.JobType, job.BatchID, job.ID)
+func (w *worker) filename(job *Job) string {
+	return fmt.Sprintf("%s_%s_%s_%d_%d.json", job.JobType, job.BatchID, job.ID, w.instanceId, w.count)
 }
 
 func (w *worker) handle(param *RPCParam) (string, error) {
@@ -129,7 +139,7 @@ func (w *worker) handleMapJob(param *RPCParam) (string, error) {
 	}
 
 	kvs := w.mapf(input, string(raw))
-	output := w.filepath(param.Job)
+	output := w.filename(param.Job)
 	if err := w.store.StoreKV(output, kvs); err != nil {
 		return "", fmt.Errorf("fail to store kv, %w", err)
 	}
@@ -138,16 +148,39 @@ func (w *worker) handleMapJob(param *RPCParam) (string, error) {
 
 func (w *worker) handleReduceJob(param *RPCParam) (string, error) {
 	input := param.Job.JobDesc.Input
+	w.logger.Debug("handling reduce job", zap.String("input", input))
 
-	raw, err := w.store.RetrieveShuffling(input)
+	rets, err := w.store.RetrieveShufflingBatch(input)
 	if err != nil {
 		return "", fmt.Errorf("fail to read input, %w", err)
 	}
 
-	result := w.reducef(raw.Key, raw.Values)
-	output := w.filepath(param.Job)
-	if err := w.store.StoreKV(output, []KeyValue{{Key: raw.Key, Value: result}}); err != nil {
+	var reduceResults []KeyValue
+	w.logProcess(rets, func(task *ShuffleResult) {
+		reduceResults = append(reduceResults, KeyValue{
+			Key:   task.Key,
+			Value: w.reducef(task.Key, task.Values),
+		})
+	})
+
+	output := w.filename(param.Job)
+	if err := w.store.StoreKV(output, reduceResults); err != nil {
 		return "", fmt.Errorf("fail to store output, %w", err)
 	}
 	return output, nil
+}
+
+func (w *worker) logProcess(tasks []*ShuffleResult, fn func(task *ShuffleResult)) {
+	w.logger.Debug("tasks details", zap.Int("len", len(tasks)))
+
+	total := len(tasks)
+	percent := 1
+
+	for i, task := range tasks {
+		fn(task)
+		if i == percent*(total/5) {
+			percent++
+			w.logger.Debug(fmt.Sprintf("task is procossing, finished %d / %d", i, total))
+		}
+	}
 }

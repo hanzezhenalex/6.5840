@@ -11,7 +11,6 @@ import "6.5840/mr"
 import "fmt"
 import "os"
 import "syscall"
-import "time"
 import "io/ioutil"
 
 func nparallel(phase string) int {
@@ -49,19 +48,23 @@ func nparallel(phase string) int {
 	}
 	dd.Close()
 
-	time.Sleep(1 * time.Second)
+	//time.Sleep(1 * time.Second)
 
-	err = os.Remove(myfilename)
-	if err != nil {
-		panic(err)
-	}
+	//err = os.Remove(myfilename)
+	//if err != nil {
+	//	panic(err)
+	//}
 
 	return ret
 }
 
 func Map(filename string, contents string) []mr.KeyValue {
-
 	kva := []mr.KeyValue{}
+
+	for i := 0; i < 2000; i++ {
+		kva = append(kva, mr.KeyValue{fmt.Sprintf("%d", i), "1"})
+	}
+
 	kva = append(kva, mr.KeyValue{"a", "1"})
 	kva = append(kva, mr.KeyValue{"b", "1"})
 	kva = append(kva, mr.KeyValue{"c", "1"})

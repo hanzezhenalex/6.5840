@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"bufio"
 	"fmt"
 	"go.uber.org/zap"
 	"log"
@@ -46,7 +47,6 @@ type Coordinator struct {
 	logger         *zap.Logger
 
 	taskMngr BatchTaskManager
-	shuffler Shuffler
 
 	reqeustCh chan *requestNewJob
 	reportCh  chan *Job
@@ -54,16 +54,16 @@ type Coordinator struct {
 
 // server start a thread that listens for RPCs from worker.go
 func (c *Coordinator) server() {
-	rpc.Register(c)
+	RegisterGobStruct()
+	if err := rpc.Register(c); err != nil {
+		panic(err)
+	}
 	rpc.HandleHTTP()
-	//l, e := net.Listen("tcp", ":1234")
-	sockname := coordinatorSock()
-	os.Remove(sockname)
-	l, e := net.Listen("unix", sockname)
+	l, e := net.Listen("tcp", fmt.Sprintf(":%s", Port))
 	if e != nil {
 		log.Fatal("listen error:", e)
 	}
-	go http.Serve(l, nil)
+	go func() { _ = http.Serve(l, nil) }()
 }
 
 // Done main/mrcoordinator.go calls Done() periodically to find out
@@ -85,8 +85,8 @@ func (c *Coordinator) setStage(stage workingStage) {
 	atomic.StoreInt32((*int32)(&c.stage), int32(stage))
 }
 
-func (c *Coordinator) RequestJob(args *RPCParam, reply *RPCParam) {
-	if args.InstanceID != -1 {
+func (c *Coordinator) RequestJob(args *RequestJobArgs, reply *RequestJobReply) error {
+	if args.InstanceID == InitInstanceID {
 		c.onboardNewInstance(reply)
 	} else {
 		reply.InstanceID = args.InstanceID
@@ -99,18 +99,26 @@ func (c *Coordinator) RequestJob(args *RPCParam, reply *RPCParam) {
 		}
 	}
 
-	task := c.taskMngr.Take()
+	task := c.taskMngr.Take(reply.InstanceID)
+
 	if task == nil {
-		reply.Job.Status = StatusJobDelivery
-		reply.Job.JobDesc.JobType = JobNoJob
+		reply.Job = &Job{
+			Status: StatusJobDelivery,
+			JobDesc: JobDesc{
+				JobType: JobNoJob,
+			},
+		}
 	} else {
-		reply.Job.Status = StatusJobDelivery
-		reply.Job.TaskHeader = task.TaskHeader
-		reply.Job.JobDesc = task.Desc.(JobDesc)
+		reply.Job = &Job{
+			Status:  StatusJobDelivery,
+			Task:    *task,
+			JobDesc: task.Desc.(JobDesc),
+		}
 	}
+	return nil
 }
 
-func (c *Coordinator) onboardNewInstance(reply *RPCParam) {
+func (c *Coordinator) onboardNewInstance(reply *RequestJobReply) {
 	reply.InstanceID = atomic.AddInt32(&c.lastInstanceID, 1)
 }
 
@@ -138,7 +146,11 @@ func (c *Coordinator) run(input []string) {
 	}
 
 	c.setStage(stageShuffling)
-	outputs, err = c.shuffler.Shuffle(outputs)
+	shuffler, err := NewInMemoryShuffler(mapBatch.id, "")
+	if err != nil {
+		panic(fmt.Errorf("fail to create shuffler: %w", err))
+	}
+	outputs, err = shuffler.Shuffle(outputs)
 	if err != nil {
 		panic(err)
 	}
@@ -150,29 +162,36 @@ func (c *Coordinator) run(input []string) {
 	}
 
 	outputs = reduceBatch.Wait().StringSlice()
-	if err = c.write(outputs); err != nil {
+	if err = c.summarize(outputs); err != nil {
 		panic(err)
 	}
 
+	c.taskMngr.Close()
 	c.setStage(stageDone)
 }
 
-func (c *Coordinator) write(files []string) error {
+func (c *Coordinator) summarize(files []string) error {
 	f, err := os.Create("mr-out-1")
 	if err != nil {
 		return fmt.Errorf("fail to create mr-out, %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
+	writer := bufio.NewWriter(f)
+
 	for _, file := range files {
-		kv, err := c.store.RetrieveKV(file)
+		kvs, err := c.store.RetrieveKVBatch(file)
 		if err != nil {
 			return fmt.Errorf("fail to retrieve kv, file=%s, %w", file, err)
 		}
-		if _, err := f.WriteString(fmt.Sprintf("%s %s\r\n", kv[0].Key, kv[0].Value)); err != nil {
-			return fmt.Errorf("fail to write to mr-out, file=%s, %w", file, err)
+		for _, kv := range kvs {
+			if _, err := writer.WriteString(fmt.Sprintf("%s %s\n", kv.Key, kv.Value)); err != nil {
+				return fmt.Errorf("fail to write to mr-out,  %w", err)
+			}
 		}
 	}
+
+	c.logger.Info("summarize finished")
 	return nil
 }
 
@@ -194,12 +213,6 @@ func MakeCoordinator(files []string, _ int) *Coordinator {
 		panic(fmt.Errorf("fail to get base logger: %w", err))
 	}
 	c.logger = logger.With(zap.String(LoggerComponent, "coordinator"))
-
-	shuffler, err := NewInMemoryShuffler("")
-	if err != nil {
-		panic(fmt.Errorf("fail to create shuffler: %w", err))
-	}
-	c.shuffler = shuffler
 
 	go c.run(files)
 	c.server()

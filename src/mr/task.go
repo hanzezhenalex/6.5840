@@ -32,9 +32,9 @@ type inmemoryBatch struct {
 	pending    []*Record
 }
 
-func newBatch(id int, redeliverInterval time.Duration, req *requestPutBatch) (*inmemoryBatch, error) {
+func newBatch(id string, redeliverInterval time.Duration, req *requestPutBatch) (*inmemoryBatch, error) {
 	batch := &inmemoryBatch{
-		id:                fmt.Sprintf("%d", id),
+		id:                id,
 		completed:         make(map[string]interface{}),
 		redeliverInterval: redeliverInterval,
 	}
@@ -87,8 +87,10 @@ func (batch *inmemoryBatch) deliverPendingFront() *Task {
 	record.deliverAt = time.Now()
 	batch.processing = append(batch.processing, record)
 
-	batch.logger.Info("deliver from pending queue",
-		zap.String("task id", record.task.ID))
+	batch.logger.Debug("deliver from pending queue",
+		zap.String("task id", record.task.ID),
+		zap.Time("deliver at", record.deliverAt),
+	)
 	return record.task
 }
 
@@ -96,15 +98,21 @@ func (batch *inmemoryBatch) tryDeliverProcessingFront() *Task {
 	record := batch.processing[0]
 	now := time.Now()
 
-	if record.deliverAt.Add(batch.redeliverInterval).After(now) {
+	if record.deliverAt.Add(batch.redeliverInterval).Before(now) {
+		lastDeliverAt := record.deliverAt
 		record.deliverAt = now
 		batch.processing = append(batch.processing[1:], record)
-		batch.logger.Info("deliver one task from processing queue",
-			zap.String("task id", record.task.ID))
+
+		batch.logger.Debug("deliver one task from processing queue",
+			zap.String("task id", record.task.ID),
+			zap.Duration("redeliverInterval", batch.redeliverInterval),
+			zap.Time("last deliver at", lastDeliverAt),
+			zap.Time("redeliver at", record.deliverAt),
+		)
 		return record.task
 	}
 
-	batch.logger.Info("no task delivered from processing queue")
+	batch.logger.Debug("no task delivered from processing queue")
 	return nil
 }
 
@@ -162,7 +170,7 @@ var (
 
 type BatchTaskManager interface {
 	Put(desc []interface{}) (*inmemoryBatch, error)
-	Take() *Task
+	Take(instanceID int32) *Task
 	ReportSuccess(header TaskHeader, output interface{})
 	ReportFailure(header TaskHeader)
 	Close()
@@ -196,7 +204,8 @@ type Record struct {
 }
 
 type requestNewJob struct {
-	ch chan *Task
+	instanceID int32
+	ch         chan *Task
 }
 
 type requestPutBatch struct {
@@ -210,7 +219,6 @@ type reportTaskStatus struct {
 }
 
 type singleBatchManager struct {
-	nextBatchID       int
 	currentBatch      *inmemoryBatch
 	redeliverInterval time.Duration
 	logger            *zap.Logger
@@ -260,9 +268,10 @@ func (mngr *singleBatchManager) initLogger() error {
 	return nil
 }
 
-func (mngr *singleBatchManager) Take() *Task {
+func (mngr *singleBatchManager) Take(instanceID int32) *Task {
 	req := &requestNewJob{
-		ch: make(chan *Task),
+		ch:         make(chan *Task),
+		instanceID: instanceID,
 	}
 
 	select {
@@ -342,7 +351,7 @@ LOOP:
 		if task == nil {
 			break LOOP
 		}
-		req := mngr.queue[0]
+		req := mngr.queue[nextDeliver]
 		req.ch <- task.copy()
 	}
 
@@ -353,8 +362,7 @@ LOOP:
 }
 
 func (mngr *singleBatchManager) createNewBatch(req *requestPutBatch) {
-	batch, err := newBatch(mngr.nextBatchID, mngr.redeliverInterval, req)
-	mngr.nextBatchID++
+	batch, err := newBatch(fmt.Sprintf("%d", time.Now().Unix()), mngr.redeliverInterval, req)
 
 	if err != nil {
 		mngr.logger.Error("fail to create new batch", zap.Error(err))
@@ -379,14 +387,25 @@ LOOP:
 			mngr.createNewBatch(req)
 			req.ch <- mngr.currentBatch
 		case req := <-mngr.requestCh:
-			mngr.logger.Info("receive new request")
+			mngr.logger.Info(
+				"receive new request",
+				zap.Int32("instance id", req.instanceID),
+			)
 			task := mngr.tryDeliverInCurrentBatch()
 			if task != nil {
-				mngr.logger.Info("task delivered", zap.String("id", task.ID))
 				req.ch <- task
+				mngr.logger.Info(
+					"task delivered",
+					zap.String("id", task.ID),
+					zap.Int32("instance id", req.instanceID),
+				)
 			} else {
 				mngr.queue = append(mngr.queue, req)
-				mngr.logger.Info("no available task, in queue", zap.Int("queue size", len(mngr.queue)))
+				mngr.logger.Info(
+					"no available task, in queue",
+					zap.Int("queue size", len(mngr.queue)),
+					zap.Int32("instance id", req.instanceID),
+				)
 			}
 		case <-mngr.ticker.C:
 			mngr.logger.Debug("tick")

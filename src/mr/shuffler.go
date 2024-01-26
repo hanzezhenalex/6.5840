@@ -2,31 +2,34 @@ package mr
 
 import (
 	"fmt"
-	"strings"
-	"time"
-
 	"go.uber.org/zap"
+	"strings"
 )
 
 type Shuffler interface {
 	Shuffle(inputs []string) ([]string, error)
 }
 
-const shuffleFilePrefix = "shuffle"
+const (
+	shuffleFilePrefix = "shuffle"
+	maxShuffleItems   = 2000
+)
 
 type InMemoryShuffler struct {
 	cnt     int
+	batchID string
+	results map[string]*ShuffleResult
 	outputs []string
 
-	storer  JsonStore
-	results map[string]*ShuffleResult
-	logger  *zap.Logger
+	storer JsonStore
+	logger *zap.Logger
 }
 
-func NewInMemoryShuffler(folder string) (*InMemoryShuffler, error) {
+func NewInMemoryShuffler(batchID, folder string) (*InMemoryShuffler, error) {
 	shuffler := &InMemoryShuffler{
 		results: make(map[string]*ShuffleResult),
 		storer:  NewJsonStore(folder),
+		batchID: batchID,
 	}
 	if err := shuffler.initLogger(); err != nil {
 		return nil, fmt.Errorf("fail to init logger, %w", err)
@@ -56,27 +59,18 @@ func (ims *InMemoryShuffler) Shuffle(inputs []string) ([]string, error) {
 	}
 
 	ims.logger.Info("shuffle success, store now", zap.Int("len", len(ims.results)))
-	for _, res := range ims.results {
-		output := ims.newOutputPath()
-		ims.logger.Debug("store shuffle", zap.String("key", res.Key), zap.String("output", output))
-		if err := ims.storer.StoreShuffling(output, res); err != nil {
-			return nil, fmt.Errorf("fail to store shuffling, %w", err)
-		}
-	}
-
-	ims.logger.Info("store successfully")
-	return ims.outputs, nil
+	return ims.storeShuffleBatch()
 }
 
 func (ims *InMemoryShuffler) newOutputPath() string {
 	ims.cnt++
-	output := fmt.Sprintf("%s-%d-%d.json", shuffleFilePrefix, time.Now().Unix(), ims.cnt)
+	output := fmt.Sprintf("%s-%s-%d.json", shuffleFilePrefix, ims.batchID, ims.cnt)
 	ims.outputs = append(ims.outputs, output)
 	return output
 }
 
 func (ims *InMemoryShuffler) shuffle(input string) error {
-	kvs, err := ims.storer.RetrieveKV(input)
+	kvs, err := ims.storer.RetrieveKVBatch(input)
 	if err != nil {
 		return fmt.Errorf("fail to retrieve kv from %s, err=%w", input, err)
 	}
@@ -92,4 +86,45 @@ func (ims *InMemoryShuffler) shuffle(input string) error {
 		result.Values = append(result.Values, kv.Value)
 	}
 	return nil
+}
+
+func (ims *InMemoryShuffler) storeShuffleBatch() ([]string, error) {
+	var (
+		batch  []*ShuffleResult
+		output string
+	)
+
+	store := func() error {
+		ims.logger.Debug(
+			"store shuffle",
+			zap.String("output", output),
+		)
+		if err := ims.storer.StoreShufflingBatch(output, batch); err != nil {
+			return fmt.Errorf("fail to store shuffling, %w", err)
+		}
+		return nil
+	}
+
+	for _, res := range ims.results {
+		if output == "" {
+			output = ims.newOutputPath()
+		}
+		if len(batch) >= maxShuffleItems {
+			if err := store(); err != nil {
+				return nil, err
+			}
+			output = ""
+			batch = batch[:0]
+		}
+		batch = append(batch, res)
+	}
+
+	if len(batch) > 0 {
+		if err := store(); err != nil {
+			return nil, err
+		}
+	}
+
+	ims.logger.Info("store successfully")
+	return ims.outputs, nil
 }
