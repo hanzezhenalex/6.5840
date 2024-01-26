@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"go.uber.org/zap"
 	"log"
-	"sort"
 	"sync/atomic"
 	"time"
 )
@@ -99,7 +98,7 @@ func (c *Coordinator) RequestJob(args *RequestJobArgs, reply *RequestJobReply) e
 		}
 	}
 
-	task := c.taskMngr.Take()
+	task := c.taskMngr.Take(reply.InstanceID)
 
 	if task == nil {
 		reply.Job = &Job{
@@ -162,7 +161,7 @@ func (c *Coordinator) run(input []string) {
 	}
 
 	outputs = reduceBatch.Wait().StringSlice()
-	if err = c.write(outputs); err != nil {
+	if err = c.summarize(outputs); err != nil {
 		panic(err)
 	}
 
@@ -170,7 +169,7 @@ func (c *Coordinator) run(input []string) {
 	c.setStage(stageDone)
 }
 
-func (c *Coordinator) write(files []string) error {
+func (c *Coordinator) summarize(files []string) error {
 	var rets []string
 	for _, file := range files {
 		kvs, err := c.store.RetrieveKV(file)
@@ -182,9 +181,9 @@ func (c *Coordinator) write(files []string) error {
 		}
 	}
 
-	sort.Slice(rets, func(i, j int) bool {
-		return rets[i] < rets[j]
-	})
+	//sort.Slice(rets, func(i, j int) bool {
+	//	return rets[i] < rets[j]
+	//})
 
 	f, err := os.Create("mr-out-1")
 	if err != nil {
