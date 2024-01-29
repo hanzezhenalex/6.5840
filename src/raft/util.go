@@ -1,6 +1,9 @@
 package raft
 
-import "log"
+import (
+	"fmt"
+	"log"
+)
 
 // Debugging
 const Debug = false
@@ -10,4 +13,10 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 		log.Printf(format, a...)
 	}
 	return
+}
+
+func AssertTrue(cond bool, format string, msg ...any) {
+	if !cond {
+		panic(fmt.Sprintf(format, msg...))
+	}
 }
