@@ -13,22 +13,25 @@ const (
 )
 
 type Follower struct {
-	worker *Worker
+	worker *Raft
 
-	timer  *time.Timer
-	stopCh chan struct{}
-	logger *zap.Logger
+	timer    *time.Timer
+	stopCh   chan struct{}
+	logger   *zap.Logger
+	interval time.Duration
 
 	status int32
 }
 
-func NewFollower(worker *Worker) *Follower {
+func NewFollower(worker *Raft) *Follower {
 	return &Follower{
-		worker: worker,
-		stopCh: make(chan struct{}),
-		timer:  time.NewTimer(worker.interval),
-		status: working,
-		logger: GetLoggerOrPanic("follower"),
+		worker:   worker,
+		stopCh:   make(chan struct{}),
+		timer:    time.NewTimer(worker.interval),
+		interval: worker.interval,
+		status:   working,
+		logger: GetLoggerOrPanic("follower").
+			With(zap.Int(Index, worker.me)),
 	}
 }
 
@@ -44,6 +47,7 @@ LOOP:
 		case <-f.timer.C:
 			f.logger.Debug("timeout")
 			atomic.StoreInt32(&f.status, timeout)
+			f.worker.Notify(followerTimeout)
 			break LOOP
 		}
 	}
@@ -57,19 +61,54 @@ func (f *Follower) StopDaemon() {
 
 func (f *Follower) Type() RoleType { return RoleFollower }
 
-func (f *Follower) HandleRequestVotesTask(_ *RequestVotesTask) {}
+func (f *Follower) HandleRequestVotesTask(task *RequestVotesTask) {
+	currentTerm := f.worker.state.GetCurrentTerm()
+	peerTerm := task.args.Term
+	logger := f.logger.With(
+		zap.Int("peer index", task.args.Me),
+		zap.Int("peer term", task.args.Term),
+		zap.Int(Term, currentTerm),
+	)
 
-func (f *Follower) HandleTickTask() {
-	if atomic.LoadInt32(&f.status) == timeout {
-		f.worker.become(RoleCandidate)
+	if currentTerm > peerTerm {
+		logger.Debug("RequestVote reject, term ahead")
+		task.reply.VoteFor = false
+	} else if currentTerm == peerTerm {
+		logger.Debug("RequestVote reject, has voted in this term")
+		task.reply.VoteFor = false
+	} else {
+		logger.Debug("vote granted")
+		task.reply.VoteFor = true
+		f.worker.state.UpdateTerm(peerTerm)
 	}
 }
 
-func (f *Follower) HandleAppendEntries() {
-	select {
-	case <-f.stopCh:
-	default:
-		f.logger.Debug("flush interval")
-		f.timer.Reset(f.worker.interval) // could be a bug, reset a closed timer?
+func (f *Follower) HandleAppendEntriesTask(task *AppendEntriesTask) {
+	f.timer.Reset(f.interval)
+
+	currentTerm := f.worker.state.GetCurrentTerm()
+	peerTerm := task.args.Term
+	logger := f.logger.With(
+		zap.Int("peer index", task.args.Me),
+		zap.Int("peer term", task.args.Term),
+		zap.Int(Term, currentTerm),
+	)
+
+	if currentTerm > peerTerm {
+		logger.Debug("AppendEntries reject, term ahead")
+	} else {
+		f.timer.Reset(f.interval)
+
+		if currentTerm < peerTerm {
+			f.worker.state.UpdateTerm(peerTerm)
+		}
+
+		// append entries
+	}
+}
+
+func (f *Follower) HandleNotify() {
+	if atomic.LoadInt32(&f.status) == timeout {
+		f.worker.become(RoleCandidate)
 	}
 }

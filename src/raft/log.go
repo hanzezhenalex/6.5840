@@ -1,5 +1,11 @@
 package raft
 
+type LogEntry struct {
+	Index   int
+	Term    int
+	Command interface{}
+}
+
 type LogManager struct {
 	lastCommitted int
 

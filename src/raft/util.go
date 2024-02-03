@@ -1,7 +1,7 @@
 package raft
 
 import (
-	"fmt"
+	"errors"
 	"log"
 )
 
@@ -15,8 +15,4 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-func AssertTrue(cond bool, format string, msg ...any) {
-	if !cond {
-		panic(fmt.Sprintf(format, msg...))
-	}
-}
+var errorWorkerStopped = errors.New("error worker stopped")

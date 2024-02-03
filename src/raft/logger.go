@@ -31,4 +31,15 @@ func GetLoggerOrPanic(component string) *zap.Logger {
 	return logger
 }
 
-const LoggerComponent = "component"
+const (
+	LoggerComponent = "component"
+	Term            = "term"
+	Peer            = "peer"
+	Index           = "index"
+)
+
+const (
+	followerTimeout       = "follower timeout"
+	candidateTimeout      = "candidate timeout"
+	candidateBecomeLeader = "candidate become leader"
+)

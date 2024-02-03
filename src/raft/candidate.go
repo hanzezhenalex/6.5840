@@ -10,16 +10,17 @@ import (
 )
 
 const (
-	inSelection int32 = 0
-	succeed     int32 = 1
+	inElection      int32 = 0
+	electionSucceed int32 = 1
+	electionTimeout int32 = 2
 )
 
 type Candidate struct {
-	worker *Worker
+	worker *Raft
 
-	currentSelectionID int64
-	succeed            int32
-	currentTerm        int
+	currentElectionID int64 // atomic
+	status            int32 // atomic
+	currentTerm       int
 
 	success chan int64
 	stopCh  chan struct{}
@@ -27,25 +28,27 @@ type Candidate struct {
 	logger  *zap.Logger
 }
 
-func NewCandidate(worker *Worker, interval time.Duration) *Candidate {
+func NewCandidate(worker *Raft, interval time.Duration) *Candidate {
 	return &Candidate{
 		worker:      worker,
 		success:     make(chan int64),
 		stopCh:      make(chan struct{}),
-		currentTerm: worker.state.term,
+		currentTerm: worker.state.GetCurrentTerm(),
 		timer:       time.NewTimer(interval),
-		succeed:     inSelection,
-		logger:      GetLoggerOrPanic("candidate"),
+		status:      inElection,
+		logger: GetLoggerOrPanic("candidate").
+			With(zap.Int(Term, worker.state.GetCurrentTerm())).
+			With(zap.Int(Index, worker.me)),
 	}
 }
 
-func (c *Candidate) HandleRequestVotesTask(_ *RequestVotesTask) {
-	c.worker.become(RoleFollower)
-}
-
-func (c *Candidate) HandleTickTask() {
-	if atomic.LoadInt32(&c.succeed) == succeed {
+func (c *Candidate) HandleNotify() {
+	if atomic.LoadInt32(&c.status) == electionSucceed {
 		c.worker.become(RoleLeader)
+	} else if atomic.CompareAndSwapInt32(&c.status, electionTimeout, inElection) {
+		c.worker.state.IncrTerm()
+		c.currentTerm = c.worker.state.GetCurrentTerm()
+		c.startNewSelection()
 	}
 }
 
@@ -56,17 +59,19 @@ LOOP:
 	for {
 		select {
 		case <-c.timer.C:
-			c.startNewSelection()
+			atomic.CompareAndSwapInt32(&c.status, inElection, electionTimeout)
+			c.worker.Notify(candidateTimeout)
 		case <-c.stopCh:
 			c.logger.Debug("shutdown")
 			break LOOP
 		case id := <-c.success:
-			if id == c.currentSelectionID {
+			if id == atomic.LoadInt64(&c.currentElectionID) {
 				c.logger.Info(
 					"win selection",
 					zap.Int64("id", id),
 				)
-				atomic.StoreInt32(&c.succeed, succeed)
+				atomic.StoreInt32(&c.status, electionSucceed)
+				c.worker.Notify(candidateBecomeLeader)
 				break LOOP
 			} else {
 				c.logger.Info(
@@ -89,14 +94,59 @@ func (c *Candidate) Type() RoleType {
 }
 
 func (c *Candidate) startNewSelection() {
-	c.currentSelectionID = time.Now().Unix()
-	newSelection(
-		c.currentSelectionID,
+	atomic.StoreInt64(&c.currentElectionID, time.Now().Unix())
+	NewElection(
+		c.currentElectionID,
 		c.currentTerm,
-		c.worker.state.me,
+		c.worker.me,
 		c.success,
 		c.worker.peers,
 	).start()
+}
+
+func (c *Candidate) HandleRequestVotesTask(task *RequestVotesTask) {
+	currentTerm := c.worker.state.GetCurrentTerm()
+	peerTerm := task.args.Term
+	logger := c.logger.With(
+		zap.Int("peer index", task.args.Me),
+		zap.Int("peer term", task.args.Term),
+		zap.Int(Term, currentTerm),
+	)
+
+	if currentTerm > peerTerm {
+		logger.Debug("RequestVote reject, term ahead")
+		task.reply.VoteFor = false
+	} else if currentTerm == peerTerm {
+		logger.Debug("RequestVote reject, voted in this term")
+		task.reply.VoteFor = false
+	} else {
+		c.worker.become(RoleFollower)
+		c.worker.state.UpdateTerm(peerTerm)
+		task.reply.VoteFor = true
+	}
+}
+
+func (c *Candidate) HandleAppendEntriesTask(task *AppendEntriesTask) {
+	currentTerm := c.worker.state.GetCurrentTerm()
+	peerTerm := task.args.Term
+	logger := c.logger.With(
+		zap.Int("peer index", task.args.Me),
+		zap.Int("peer term", task.args.Term),
+		zap.Int(Term, currentTerm),
+	)
+
+	if currentTerm > peerTerm {
+		logger.Debug("AppendEntries reject, term ahead")
+	} else {
+		logger.Info("someone has won the election")
+		c.worker.become(RoleFollower)
+
+		if currentTerm < peerTerm {
+			c.worker.state.UpdateTerm(peerTerm)
+		}
+
+		// append entries
+	}
 }
 
 type vote struct {
@@ -104,7 +154,7 @@ type vote struct {
 	voteForMe bool
 }
 
-type selection struct {
+type Election struct {
 	id   int64
 	term int
 	me   int
@@ -117,52 +167,58 @@ type selection struct {
 	logger *zap.Logger
 }
 
-func newSelection(
+func NewElection(
 	id int64,
 	term int,
 	me int,
 	success chan int64,
 	peers []*labrpc.ClientEnd,
-) *selection {
-	return &selection{
+) *Election {
+	return &Election{
 		id:      id,
 		success: success,
 		term:    term,
 		me:      me,
 		peers:   peers,
 		result:  make(chan vote, len(peers)),
-		logger:  GetLoggerOrPanic("selection").With(zap.Int64("id", id)),
-		timer:   time.NewTimer(10 * time.Second),
+		logger: GetLoggerOrPanic("selection").
+			With(zap.Int64("selection id", id)).
+			With(zap.Int(Index, me)).
+			With(zap.Int(Term, term)),
+		timer: time.NewTimer(2 * time.Second),
 	}
 }
 
-func (m *selection) start() {
+func (m *Election) start() {
 	args := RequestVoteArgs{
 		Term: m.term,
 		Me:   m.me,
 	}
 
 	for index, peer := range m.peers {
-		go m.call(index, peer, &args)
+		if index == m.me {
+			continue
+		}
+		go m.call(index, peer, args)
 	}
 
 	go m.wait()
 	m.logger.Info("selection started")
 }
 
-func (m *selection) newVote(voteFor bool) vote {
+func (m *Election) newVote(voteFor bool) vote {
 	return vote{
 		id:        m.id,
 		voteForMe: voteFor,
 	}
 }
 
-func (m *selection) call(index int, peer *labrpc.ClientEnd, args *RequestVoteArgs) {
+func (m *Election) call(peerIndex int, peer *labrpc.ClientEnd, args RequestVoteArgs) {
 	var reply RequestVoteReply
-	logger := m.logger.With(zap.Int("index", index))
+	logger := m.logger.With(zap.Int(Peer, peerIndex))
 
 	logger.Debug("send rpc req for vote")
-	if ok := peer.Call("Raft.RequestVote", &args, &reply); !ok {
+	if ok := peer.Call("Raft.RequestVote", args, &reply); !ok {
 		logger.Warn("fail to send RPC to peer")
 		reply.VoteFor = false
 	}
@@ -175,15 +231,16 @@ func (m *selection) call(index int, peer *labrpc.ClientEnd, args *RequestVoteArg
 	}
 }
 
-func (m *selection) wait() {
+func (m *Election) wait() {
 	total := len(m.peers)
+	half := total/2 + 1 // win -> more than half
 	received := 0
-	voted := 0
+	voted := 1 // vote for self at the beginning
 
 	defer m.timer.Stop()
 
 LOOP:
-	for received < total {
+	for received < total-1 {
 		select {
 		case result := <-m.result:
 			received++
@@ -195,19 +252,32 @@ LOOP:
 				zap.Bool("vote for me", result.voteForMe),
 				zap.Int("voted", voted),
 				zap.Int("received", received),
+				zap.Int("total", total),
 			)
-			if voted > received/2 {
+			if voted == half {
 				m.logger.Info(
 					"voted more than half, success",
 					zap.Int("voted", voted),
 					zap.Int("received", received),
+					zap.Int("total", total),
 				)
 				m.success <- m.id
 				break LOOP
 			}
 		case <-m.timer.C:
 			m.logger.Debug("timeout, stop selection")
-			break LOOP
+			return
 		}
 	}
+
+	for received < total-1 {
+		<-m.result
+		m.logger.Debug(""+
+			"vote has been succeed, clean up votes",
+			zap.Int("received", received),
+			zap.Int("total", total),
+		)
+		received++
+	}
+	m.logger.Debug("all vote result received")
 }
