@@ -9,7 +9,12 @@ import (
 func GetBaseLogger() (*zap.Logger, error) {
 	if os.Getenv("MR_PROD") == "true" {
 		cfg := zap.NewProductionConfig()
+
 		cfg.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
+		cfg.DisableStacktrace = true
+		cfg.DisableCaller = true
+		cfg.Development = false
+
 		return cfg.Build()
 	}
 	return zap.NewDevelopment()

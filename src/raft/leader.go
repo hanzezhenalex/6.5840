@@ -126,7 +126,7 @@ func NewReplicator(
 			With(zap.Int(Term, worker.state.GetCurrentTerm())).
 			With(zap.Int(Index, worker.me)),
 		stopCh:   stopCh,
-		interval: worker.interval,
+		interval: worker.heartBeatInterval,
 		timeout:  2 * time.Second,
 	}
 }
@@ -161,7 +161,7 @@ func (rp *replicator) syncLogsWithPeer() {
 	if stopOnTimeout := rp.withTimeout(func() {
 		rp.logger.Info("call RPC for sync logs")
 		if ok := rp.peer.Call("Raft.AppendEntries", args, &reply); !ok {
-			rp.logger.Error("fail to send RPC request to peer")
+			rp.logger.Warn("fail to send RPC request to peer")
 		}
 	}); stopOnTimeout {
 		rp.logger.Warn("timeout sending RPC request to peer")

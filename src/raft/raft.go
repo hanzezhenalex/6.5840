@@ -103,8 +103,9 @@ type Raft struct {
 	role   Role
 	logger *zap.Logger
 
-	peers    []*labrpc.ClientEnd // RPC end points of all peers
-	interval time.Duration
+	peers             []*labrpc.ClientEnd // RPC end points of all peers
+	timeout           time.Duration
+	heartBeatInterval time.Duration
 
 	stopCh          chan struct{}
 	appendEntriesCh chan *AppendEntriesTask
@@ -124,7 +125,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		peers: peers,
 		logger: GetLoggerOrPanic("raft").
 			With(zap.Int(Index, me)),
-		interval: time.Duration(50+(rand.Int63()%300)) * time.Millisecond,
+		timeout:           time.Duration(150+(rand.Int63()%150)) * time.Millisecond,
+		heartBeatInterval: time.Duration(100) * time.Millisecond,
 
 		stopCh:          make(chan struct{}),
 		appendEntriesCh: make(chan *AppendEntriesTask),
@@ -298,7 +300,7 @@ func (rf *Raft) become(role RoleType) {
 		rf.role = NewLeader(rf)
 	case RoleCandidate:
 		rf.state.IncrTerm()
-		rf.role = NewCandidate(rf, rf.interval)
+		rf.role = NewCandidate(rf)
 	}
 
 	go rf.role.StartDaemon()

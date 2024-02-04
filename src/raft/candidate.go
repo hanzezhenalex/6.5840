@@ -21,6 +21,7 @@ type Candidate struct {
 	currentElectionID int64 // atomic
 	status            int32 // atomic
 	currentTerm       int
+	timeout           time.Duration
 
 	success chan int64
 	stopCh  chan struct{}
@@ -28,13 +29,14 @@ type Candidate struct {
 	logger  *zap.Logger
 }
 
-func NewCandidate(worker *Raft, interval time.Duration) *Candidate {
+func NewCandidate(worker *Raft) *Candidate {
 	return &Candidate{
 		worker:      worker,
 		success:     make(chan int64),
 		stopCh:      make(chan struct{}),
 		currentTerm: worker.state.GetCurrentTerm(),
-		timer:       time.NewTimer(interval),
+		timer:       time.NewTimer(worker.timeout),
+		timeout:     worker.timeout,
 		status:      inElection,
 		logger: GetLoggerOrPanic("candidate").
 			With(zap.Int(Term, worker.state.GetCurrentTerm())).
@@ -102,6 +104,7 @@ func (c *Candidate) startNewSelection() {
 		c.success,
 		c.worker.peers,
 	).start()
+	c.timer.Reset(c.timeout)
 }
 
 func (c *Candidate) HandleRequestVotesTask(task *RequestVotesTask) {

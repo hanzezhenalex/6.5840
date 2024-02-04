@@ -27,8 +27,8 @@ func NewFollower(worker *Raft) *Follower {
 	return &Follower{
 		worker:   worker,
 		stopCh:   make(chan struct{}),
-		timer:    time.NewTimer(worker.interval),
-		interval: worker.interval,
+		timer:    time.NewTimer(worker.timeout),
+		interval: worker.timeout,
 		status:   working,
 		logger: GetLoggerOrPanic("follower").
 			With(zap.Int(Index, worker.me)),
@@ -79,13 +79,13 @@ func (f *Follower) HandleRequestVotesTask(task *RequestVotesTask) {
 	} else {
 		logger.Debug("vote granted")
 		task.reply.VoteFor = true
+
+		f.resetTimer(logger)
 		f.worker.state.UpdateTerm(peerTerm)
 	}
 }
 
 func (f *Follower) HandleAppendEntriesTask(task *AppendEntriesTask) {
-	f.timer.Reset(f.interval)
-
 	currentTerm := f.worker.state.GetCurrentTerm()
 	peerTerm := task.args.Term
 	logger := f.logger.With(
@@ -97,7 +97,7 @@ func (f *Follower) HandleAppendEntriesTask(task *AppendEntriesTask) {
 	if currentTerm > peerTerm {
 		logger.Debug("AppendEntries reject, term ahead")
 	} else {
-		f.timer.Reset(f.interval)
+		f.resetTimer(logger)
 
 		if currentTerm < peerTerm {
 			f.worker.state.UpdateTerm(peerTerm)
@@ -111,4 +111,9 @@ func (f *Follower) HandleNotify() {
 	if atomic.LoadInt32(&f.status) == timeout {
 		f.worker.become(RoleCandidate)
 	}
+}
+
+func (f *Follower) resetTimer(logger *zap.Logger) {
+	logger.Debug("timer reset", zap.String("interval", f.interval.String()))
+	f.timer.Reset(f.interval)
 }

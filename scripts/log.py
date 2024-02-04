@@ -39,7 +39,8 @@ def createEntry(msg: str):
         return DebugLogEntry(msg), -1
 
     try:
-        items = msg.split(" ")
+        items = msg.split("\t")
+        # print(items)
         time = items[0]
 
         fields = items[4]
