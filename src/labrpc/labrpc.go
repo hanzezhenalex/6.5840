@@ -461,7 +461,8 @@ func MakeService(rcvr interface{}) *Service {
 			mtype.NumIn() != 3 ||
 			//mtype.In(1).Kind() != reflect.Ptr ||
 			mtype.In(2).Kind() != reflect.Ptr ||
-			mtype.NumOut() != 0 {
+			mtype.NumOut() != 1 ||
+			mtype.Out(0) != reflect.TypeOf((*error)(nil)).Elem() {
 			// the method is not suitable for a handler
 			//fmt.Printf("bad method: %v\n", mname)
 		} else {
@@ -491,7 +492,11 @@ func (svc *Service) dispatch(methname string, req reqMsg) replyMsg {
 
 		// call the method.
 		function := method.Func
-		function.Call([]reflect.Value{svc.rcvr, args.Elem(), replyv})
+		values := function.Call([]reflect.Value{svc.rcvr, args.Elem(), replyv})
+
+		if values[0].IsNil() == false {
+			return replyMsg{false, nil}
+		}
 
 		// encode the reply.
 		rb := new(bytes.Buffer)
