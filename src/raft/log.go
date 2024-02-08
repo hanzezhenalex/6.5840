@@ -2,6 +2,7 @@ package raft
 
 import (
 	"fmt"
+
 	"go.uber.org/zap"
 )
 

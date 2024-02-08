@@ -65,7 +65,6 @@ func (sm *StateManager) SyncStateFromAppendEntriesTask(task *AppendEntriesTask) 
 	if currentTerm < peerTerm {
 		sm.UpdateTerm(peerTerm)
 	}
-	sm.UpdateCommitted(task.args.LeaderLastCommitted)
 
 	nextIndex, logAppended := sm.logMngr.AppendLogAndReturnNextIndex(
 		task.args.LastLogIndex,
@@ -76,4 +75,10 @@ func (sm *StateManager) SyncStateFromAppendEntriesTask(task *AppendEntriesTask) 
 	task.reply.ExpectedNextIndex = nextIndex
 	task.reply.Success = logAppended
 	task.reply.Term = sm.GetCurrentTerm()
+
+	if task.reply.Success || task.args.Logs == nil {
+		// Success == false means log is matching
+		// update committed in matching phase could commit wrong logs
+		sm.UpdateCommitted(task.args.LeaderLastCommitted)
+	}
 }

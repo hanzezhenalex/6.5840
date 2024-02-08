@@ -45,7 +45,7 @@ def createEntry(msg: str):
 
         fields = items[4]
         fields_json = json.loads(fields)
-        id = fields_json["index"]
+        id = fields_json["me"]
 
         log = items[3] + " " + items[4]
     except Exception as e:

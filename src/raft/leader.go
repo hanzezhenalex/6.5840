@@ -186,6 +186,8 @@ func NewReplicator(
 }
 
 func (rp *replicator) initNextIndex() {
+	// replicator has to make sure that DO NOT send empty log when matching
+	// if not, wrong logs could be committed, see src/raft/state.go:79
 	rp.nextIndex = rp.state.Load().(*StateManager).logMngr.GetLastLogIndex()
 	if rp.nextIndex == 0 { // no log in the state mngr
 		rp.nextIndex = IndexStartFrom
@@ -222,10 +224,11 @@ func (rp *replicator) syncLogsWithPeer() {
 		rp.logger.Debug(
 			"AppendEntries args",
 			zap.String("v", fmt.Sprintf("%#v", args)),
+			zap.String("log", fmt.Sprintf("%#v", args.Logs)),
 		)
 
 		if err := rp.withTimeout(func() error {
-			rp.logger.Debug("call RPC for sync logs")
+			//rp.logger.Debug("call RPC for sync logs")
 			if ok := rp.peer.Call("Raft.AppendEntries", args, &reply); !ok {
 				return errorSendReqToPeer
 			}

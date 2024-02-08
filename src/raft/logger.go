@@ -34,7 +34,7 @@ const (
 	LoggerComponent = "component"
 	Term            = "term"
 	Peer            = "peer"
-	Index           = "index"
+	Index           = "me"
 	PeerTerm        = "peer term"
 )
 

@@ -87,8 +87,8 @@ type Raft struct {
 	notifyCh          chan struct{}
 	commitTicker      *time.Ticker
 
-	lastCommitted int
-	applyMsgCh    chan ApplyMsg
+	lastApplied int
+	applyMsgCh  chan ApplyMsg
 }
 
 func Make(peers []*labrpc.ClientEnd, me int,
@@ -96,7 +96,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	worker := &Raft{
 		me: me,
 		state: &StateManager{
-			committed: -1,
+			committed: EmptyLogIndex,
 			term:      0,
 			logMngr:   NewLogManager(me),
 		},
@@ -114,8 +114,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		notifyCh:          make(chan struct{}),
 		commitTicker:      time.NewTicker(200 * time.Millisecond),
 
-		applyMsgCh:    applyCh,
-		lastCommitted: EmptyLogIndex,
+		applyMsgCh:  applyCh,
+		lastApplied: EmptyLogIndex,
 	}
 	worker.role = NewFollower(worker)
 
@@ -310,10 +310,10 @@ func (rf *Raft) apply() {
 		rf.role.(*Leader).UpdateCommittedIndex()
 	}
 
-	oldLastCommitted := rf.lastCommitted
+	oldLastCommitted := rf.lastApplied
 
 LOOP:
-	for i := rf.lastCommitted + 1; i <= rf.state.committed; i++ {
+	for i := rf.lastApplied + 1; i <= rf.state.committed; i++ {
 		log, err := rf.state.logMngr.GetLogByIndex(i)
 		if err != nil {
 			break LOOP
@@ -323,14 +323,14 @@ LOOP:
 			CommandValid: true,
 			CommandIndex: log.Index,
 		}
-		rf.lastCommitted++
+		rf.lastApplied++
 	}
 
-	if oldLastCommitted != rf.lastCommitted {
+	if oldLastCommitted != rf.lastApplied {
 		rf.logger.Info(
 			"log committed",
 			zap.Int("old", oldLastCommitted),
-			zap.Int("current", rf.lastCommitted),
+			zap.Int("current", rf.lastApplied),
 		)
 	}
 }
