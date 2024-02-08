@@ -20,7 +20,6 @@ type Candidate struct {
 
 	currentElectionID int64 // atomic
 	status            int32 // atomic
-	currentTerm       int
 	timeout           time.Duration
 
 	success chan int64
@@ -31,15 +30,13 @@ type Candidate struct {
 
 func NewCandidate(worker *Raft) *Candidate {
 	return &Candidate{
-		worker:      worker,
-		success:     make(chan int64),
-		stopCh:      make(chan struct{}),
-		currentTerm: worker.state.GetCurrentTerm(),
-		timer:       time.NewTimer(worker.timeout),
-		timeout:     worker.timeout,
-		status:      inElection,
+		worker:  worker,
+		success: make(chan int64),
+		stopCh:  make(chan struct{}),
+		timer:   time.NewTimer(worker.timeout),
+		timeout: worker.timeout,
+		status:  inElection,
 		logger: GetLoggerOrPanic("candidate").
-			With(zap.Int(Term, worker.state.GetCurrentTerm())).
 			With(zap.Int(Index, worker.me)),
 	}
 }
@@ -49,7 +46,6 @@ func (c *Candidate) HandleNotify() {
 		c.worker.become(RoleLeader)
 	} else if atomic.CompareAndSwapInt32(&c.status, electionTimeout, inElection) {
 		c.worker.state.IncrTerm()
-		c.currentTerm = c.worker.state.GetCurrentTerm()
 		c.startNewSelection()
 	}
 }
@@ -97,10 +93,12 @@ func (c *Candidate) Type() RoleType {
 
 func (c *Candidate) startNewSelection() {
 	atomic.StoreInt64(&c.currentElectionID, time.Now().Unix())
-	NewElection(
+	go NewElection(
 		c.currentElectionID,
-		c.currentTerm,
+		c.worker.state.GetCurrentTerm(),
 		c.worker.me,
+		c.worker.state.logMngr.GetLastLogIndex(),
+		c.worker.state.logMngr.GetLastLogTerm(),
 		c.success,
 		c.worker.peers,
 	).start()
@@ -129,7 +127,7 @@ func (c *Candidate) HandleRequestVotesTask(task *RequestVotesTask) {
 			zap.Int("lastLogIndex", c.worker.state.logMngr.GetLastLogIndex()),
 			zap.Int("lastLogTerm", c.worker.state.logMngr.GetLastLogTerm()),
 			zap.Int("peerLastLogIndex", task.args.LeaderLastLogIndex),
-			zap.Int("peerLastLogIndex", task.args.LeaderLastLogTerm),
+			zap.Int("peerLastLogTerm", task.args.LeaderLastLogTerm),
 		)
 		task.reply.VoteFor = false
 	} else {
@@ -149,7 +147,7 @@ func (c *Candidate) HandleAppendEntriesTask(task *AppendEntriesTask) {
 	)
 
 	if currentTerm > peerTerm {
-		logger.Debug("AppendEntries reject, term ahead")
+		handleTermBehindRequest(c.worker, task.reply, logger)
 	} else {
 		logger.Info("someone has won the election")
 		c.worker.become(RoleFollower)
@@ -164,7 +162,7 @@ type vote struct {
 
 type Election struct {
 	id   int64
-	term int
+	args RequestVoteArgs
 	me   int
 
 	timer   *time.Timer
@@ -179,16 +177,23 @@ func NewElection(
 	id int64,
 	term int,
 	me int,
+	leaderLastLogIndex int,
+	leaderLastLogTerm int,
 	success chan int64,
 	peers []*labrpc.ClientEnd,
 ) *Election {
 	return &Election{
 		id:      id,
 		success: success,
-		term:    term,
-		me:      me,
-		peers:   peers,
-		result:  make(chan vote, len(peers)),
+		args: RequestVoteArgs{
+			Term:               term,
+			Me:                 me,
+			LeaderLastLogTerm:  leaderLastLogTerm,
+			LeaderLastLogIndex: leaderLastLogIndex,
+		},
+		me:     me,
+		peers:  peers,
+		result: make(chan vote, len(peers)),
 		logger: GetLoggerOrPanic("selection").
 			With(zap.Int64("selection id", id)).
 			With(zap.Int(Index, me)).
@@ -198,20 +203,15 @@ func NewElection(
 }
 
 func (m *Election) start() {
-	args := RequestVoteArgs{
-		Term: m.term,
-		Me:   m.me,
-	}
-
 	for index, peer := range m.peers {
 		if index == m.me {
 			continue
 		}
-		go m.call(index, peer, args)
+		go m.call(index, peer, m.args)
 	}
 
-	go m.wait()
 	m.logger.Info("selection started")
+	m.wait()
 }
 
 func (m *Election) newVote(voteFor bool) vote {

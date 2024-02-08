@@ -105,7 +105,7 @@ func (f *Follower) HandleAppendEntriesTask(task *AppendEntriesTask) {
 	)
 
 	if currentTerm > peerTerm {
-		logger.Debug("AppendEntries reject, term ahead")
+		handleTermBehindRequest(f.worker, task.reply, logger)
 	} else {
 		f.resetTimer(logger)
 		f.worker.state.SyncStateFromAppendEntriesTask(task)

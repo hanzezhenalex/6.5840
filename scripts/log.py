@@ -49,7 +49,7 @@ def createEntry(msg: str):
 
         log = items[3] + " " + items[4]
     except Exception as e:
-        print("wrong entry detected, msg= {}".format(msg))
+        print("wrong entry detected, msg= {}, items={}".format(msg, items))
         return DebugLogEntry(msg), -1
 
     return RoleLogEntry(time, id, log), id

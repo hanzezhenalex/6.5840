@@ -98,7 +98,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		state: &StateManager{
 			committed: -1,
 			term:      0,
-			logMngr:   NewLogManager(),
+			logMngr:   NewLogManager(me),
 		},
 		peers: peers,
 		logger: GetLoggerOrPanic("raft").
@@ -394,4 +394,10 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) error
 func (rf *Raft) Notify(msg string) {
 	rf.logger.Debug("notify worker", zap.String("reason", msg))
 	go func() { rf.notifyCh <- struct{}{} }()
+}
+
+func handleTermBehindRequest(worker *Raft, reply *AppendEntryReply, logger *zap.Logger) {
+	logger.Debug("AppendEntries reject, term ahead")
+	reply.Term = worker.state.GetCurrentTerm()
+	reply.ExpectedNextIndex = worker.state.logMngr.GetLastLogIndex()
 }

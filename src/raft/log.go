@@ -1,6 +1,9 @@
 package raft
 
-import "go.uber.org/zap"
+import (
+	"fmt"
+	"go.uber.org/zap"
+)
 
 const (
 	IndexStartFrom = 1
@@ -21,10 +24,10 @@ type LogManager struct {
 	logger *zap.Logger
 }
 
-func NewLogManager() *LogManager {
+func NewLogManager(me int) *LogManager {
 	lm := &LogManager{
 		logs:   make([]*LogEntry, 0, 10),
-		logger: GetLoggerOrPanic("log mngr"),
+		logger: GetLoggerOrPanic("log mngr").With(zap.Int(Index, me)),
 	}
 	lm.reset()
 	return lm
@@ -99,7 +102,10 @@ func (lm *LogManager) AppendLogAndReturnNextIndex(lastLogIndex, lastLogTerm int,
 		lm.logger.Debug("log matched, want next")
 		return log.Index + 1, false
 	} else if match(lastLogIndex, lastLogTerm) {
-		lm.logger.Debug("last log matched, append")
+		lm.logger.Debug(
+			"last log matched, append",
+			zap.String("log", fmt.Sprintf("%#v", log)),
+		)
 		lm.Truncate(lastLogIndex + 1)
 		lm.appendOneLog(log)
 		return log.Index + 1, true
@@ -123,8 +129,7 @@ func (lm *LogManager) appendOneLog(log *LogEntry) {
 	}
 
 	lm.logs = append(lm.logs, log)
-	lm.lastLogIndex = log.Index
-	lm.lastLogTerm = log.Term
+	lm.updateLastLog(log.Term, log.Index)
 }
 
 func (lm *LogManager) reset() {
@@ -133,6 +138,9 @@ func (lm *LogManager) reset() {
 }
 
 func (lm *LogManager) updateLastLog(term, index int) {
+	if index < IndexStartFrom {
+		panic("index should not less than 1")
+	}
 	lm.lastLogTerm = term
 	lm.lastLogIndex = index
 }

@@ -106,7 +106,7 @@ func (l *Leader) HandleAppendEntriesTask(task *AppendEntriesTask) {
 	)
 
 	if currentTerm > peerTerm {
-		logger.Debug("AppendEntries reject, term ahead")
+		handleTermBehindRequest(l.worker, task.reply, logger)
 	} else if currentTerm == peerTerm {
 		panic("two leaders in one term")
 	} else {
@@ -177,14 +177,14 @@ func NewReplicator(
 			With(zap.Int(Index, worker.me)),
 		stopCh:     stopCh,
 		timeout:    worker.heartBeatInterval,
-		replicated: -1,
+		replicated: EmptyLogIndex,
 	}
 }
 
 func (rp *replicator) initNextIndex() {
 	rp.nextIndex = rp.state.Load().(*StateManager).logMngr.GetLastLogIndex()
 	if rp.nextIndex == 0 { // no log in the state mngr
-		rp.nextIndex = 1
+		rp.nextIndex = IndexStartFrom
 	}
 }
 
@@ -215,20 +215,35 @@ func (rp *replicator) syncLogsWithPeer() {
 			reply AppendEntryReply
 		)
 		args, continueSending = rp.fillAppendEntriesArgs()
+		rp.logger.Debug(
+			"AppendEntries args",
+			zap.String("v", fmt.Sprintf("%#v", args)),
+		)
 
-		if stopOnTimeout := rp.withTimeout(func() {
+		if err := rp.withTimeout(func() error {
 			rp.logger.Debug("call RPC for sync logs")
 			if ok := rp.peer.Call("Raft.AppendEntries", args, &reply); !ok {
-				rp.logger.Warn("fail to send RPC request to peer")
+				return errorSendReqToPeer
 			}
-		}); stopOnTimeout {
-			rp.logger.Warn("timeout sending RPC request to peer")
+			return nil
+		}); err != nil {
+			rp.logger.Warn(
+				"an error happened when sending RPC request to peer",
+				zap.Error(err),
+			)
 			return
 		}
 
+		rp.logger.Debug(
+			"AppendEntries reply",
+			zap.String("v", fmt.Sprintf("%#v", reply)),
+		)
 		rp.nextIndex = reply.ExpectedNextIndex
 		if reply.Success {
 			atomic.StoreInt32(&rp.replicated, int32(args.Logs.Index))
+		}
+		if reply.Term > rp.term {
+			continueSending = false
 		}
 	}
 }
@@ -265,12 +280,13 @@ func (rp *replicator) fillAppendEntriesArgs() (AppendEntryArgs, bool) {
 	return args, true
 }
 
-func (rp *replicator) withTimeout(fn func()) bool {
+func (rp *replicator) withTimeout(fn func() error) error {
 	timer := time.NewTimer(rp.timeout)
 	done := make(chan struct{})
+	var err error
 
 	go func() {
-		fn()
+		err = fn()
 		select {
 		case <-timer.C:
 		default:
@@ -281,8 +297,8 @@ func (rp *replicator) withTimeout(fn func()) bool {
 
 	select {
 	case <-timer.C:
-		return true
+		return errorTimeout
 	case <-done:
-		return false
+		return err
 	}
 }
