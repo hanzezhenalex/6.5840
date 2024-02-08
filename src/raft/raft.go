@@ -68,8 +68,26 @@ type Role interface {
 }
 
 type StateManager struct {
-	term    int
-	logMngr *LogManager
+	committed int
+	term      int
+	logMngr   *LogManager
+}
+
+func (sm *StateManager) New() *StateManager {
+	return &StateManager{
+		committed: sm.committed,
+		term:      sm.term,
+		logMngr:   sm.logMngr.New(),
+	}
+}
+
+func (sm *StateManager) IsLogAheadPeer(peerLastLogIndex int, peerLastLogTerm int) bool {
+	if sm.logMngr.GetLastLogTerm() > peerLastLogTerm {
+		return true
+	} else if sm.logMngr.GetLastLogTerm() == peerLastLogTerm {
+		return sm.logMngr.GetLastLogIndex() > peerLastLogIndex
+	}
+	return false
 }
 
 func (sm *StateManager) GetCurrentTerm() int {
@@ -87,12 +105,44 @@ func (sm *StateManager) UpdateTerm(newTerm int) {
 	sm.term = newTerm
 }
 
+func (sm *StateManager) UpdateCommitted(committed int) bool {
+	if sm.committed < committed {
+		sm.committed = committed
+		return true
+	}
+	return false
+}
+
+func (sm *StateManager) GetCommitted() int {
+	return sm.committed
+}
+
 func (sm *StateManager) StateBehindPeer(term int) bool {
 	if sm.term >= term {
 		return false
 	}
 	sm.term = term
 	return true
+}
+
+func (sm *StateManager) SyncStateFromAppendEntriesTask(task *AppendEntriesTask) {
+	currentTerm := sm.GetCurrentTerm()
+	peerTerm := task.args.Term
+
+	if currentTerm < peerTerm {
+		sm.UpdateTerm(peerTerm)
+	}
+	sm.UpdateCommitted(task.args.LeaderLastCommitted)
+
+	nextIndex, logAppended := sm.logMngr.AppendLogAndReturnNextIndex(
+		task.args.LastLogIndex,
+		task.args.LastLogTerm,
+		task.args.Logs,
+	)
+	// peer needs these for committing and deciding next log to send
+	task.reply.ExpectedNextIndex = nextIndex
+	task.reply.Success = logAppended
+	task.reply.Term = sm.GetCurrentTerm()
 }
 
 type Raft struct {
@@ -107,11 +157,16 @@ type Raft struct {
 	timeout           time.Duration
 	heartBeatInterval time.Duration
 
-	stopCh          chan struct{}
-	appendEntriesCh chan *AppendEntriesTask
-	requestVoteCh   chan *RequestVotesTask
-	getStateCh      chan *StateTask
-	notifyCh        chan struct{}
+	stopCh            chan struct{}
+	appendEntriesCh   chan *AppendEntriesTask
+	requestVoteCh     chan *RequestVotesTask
+	getStateCh        chan *StateTask
+	storeNewCommandCh chan *StoreNewCommandTask
+	notifyCh          chan struct{}
+	commitTicker      *time.Ticker
+
+	lastCommitted int
+	applyMsgCh    chan ApplyMsg
 }
 
 func Make(peers []*labrpc.ClientEnd, me int,
@@ -119,8 +174,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	worker := &Raft{
 		me: me,
 		state: &StateManager{
-			term:    0,
-			logMngr: NewLogManager(),
+			committed: -1,
+			term:      0,
+			logMngr:   NewLogManager(),
 		},
 		peers: peers,
 		logger: GetLoggerOrPanic("raft").
@@ -128,11 +184,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		timeout:           time.Duration(150+(rand.Int63()%150)) * time.Millisecond,
 		heartBeatInterval: time.Duration(100) * time.Millisecond,
 
-		stopCh:          make(chan struct{}),
-		appendEntriesCh: make(chan *AppendEntriesTask),
-		requestVoteCh:   make(chan *RequestVotesTask),
-		getStateCh:      make(chan *StateTask),
-		notifyCh:        make(chan struct{}),
+		stopCh:            make(chan struct{}),
+		appendEntriesCh:   make(chan *AppendEntriesTask),
+		requestVoteCh:     make(chan *RequestVotesTask),
+		getStateCh:        make(chan *StateTask),
+		storeNewCommandCh: make(chan *StoreNewCommandTask),
+		notifyCh:          make(chan struct{}),
+		commitTicker:      time.NewTicker(200 * time.Millisecond),
+
+		applyMsgCh:    applyCh,
+		lastCommitted: -1,
 	}
 	worker.role = NewFollower(worker)
 
@@ -202,16 +263,54 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 }
 
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	log := &LogEntry{
+		Index:   -1,
+		Term:    -1,
+		Command: command,
+	}
+	task := &StoreNewCommandTask{
+		Log: log,
+	}
+	task.wg.Add(1)
 
-	// Your code here (2B).
+	select {
+	case <-rf.stopCh:
+		return -1, -1, false
+	case rf.storeNewCommandCh <- task:
+	}
 
-	return index, term, isLeader
+	task.wg.Wait()
+	rf.logger.Info(
+		"store new command",
+		zap.Bool("success", task.Success),
+		zap.String("command", fmt.Sprintf("%#v", log)),
+	)
+	return log.Index, log.Term, task.Success
 }
 
 func (rf *Raft) Kill() { close(rf.stopCh) }
+
+type StoreNewCommandTask struct {
+	Success bool
+	Log     *LogEntry
+	wg      sync.WaitGroup
+}
+
+func (rf *Raft) handleStoreNewCommandTask(task *StoreNewCommandTask) {
+	defer task.wg.Done()
+
+	if rf.role.Type() == RoleLeader {
+		rf.state.logMngr.AppendNewLog(rf.state.GetCurrentTerm(), task.Log.Command)
+		rf.role.(*Leader).UpdateReplicatorState()
+
+		task.Log.Term = rf.state.GetCurrentTerm()
+		task.Log.Index = rf.state.logMngr.GetLastLogIndex()
+
+		task.Success = true
+	} else {
+		task.Success = false
+	}
+}
 
 type State struct {
 	term     int
@@ -274,10 +373,44 @@ LOOP:
 			rf.role.HandleNotify()
 		case task := <-rf.getStateCh:
 			task.ch <- rf.handleGetStateTask()
+		case task := <-rf.storeNewCommandCh:
+			rf.handleStoreNewCommandTask(task)
+		case <-rf.commitTicker.C:
+			rf.apply()
 		}
 	}
 
 	rf.role.StopDaemon()
+}
+
+func (rf *Raft) apply() {
+	if rf.role.Type() == RoleLeader {
+		rf.role.(*Leader).UpdateCommittedIndex()
+	}
+
+	oldLastCommitted := rf.lastCommitted
+
+LOOP:
+	for i := rf.lastCommitted + 1; i <= rf.state.committed; i++ {
+		log, err := rf.state.logMngr.GetLogByIndex(i)
+		if err != nil {
+			break LOOP
+		}
+		rf.applyMsgCh <- ApplyMsg{
+			Command:      log.Command,
+			CommandValid: true,
+			CommandIndex: log.Index,
+		}
+		rf.lastCommitted++
+	}
+
+	if oldLastCommitted != rf.lastCommitted {
+		rf.logger.Info(
+			"log committed",
+			zap.Int("old", oldLastCommitted),
+			zap.Int("current", rf.lastCommitted),
+		)
+	}
 }
 
 func (rf *Raft) become(role RoleType) {

@@ -15,4 +15,9 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-var errorWorkerStopped = errors.New("error worker stopped")
+var (
+	errorWorkerStopped = errors.New("error worker stopped")
+
+	errorLogIndexOutOfRange = errors.New("log index out of range")
+	errorIllegalLogIndex    = errors.New("log index should not less than zero")
+)

@@ -111,8 +111,8 @@ func (c *Candidate) HandleRequestVotesTask(task *RequestVotesTask) {
 	currentTerm := c.worker.state.GetCurrentTerm()
 	peerTerm := task.args.Term
 	logger := c.logger.With(
-		zap.Int("peer index", task.args.Me),
-		zap.Int("peer term", task.args.Term),
+		zap.Int(Peer, task.args.Me),
+		zap.Int(PeerTerm, task.args.Term),
 		zap.Int(Term, currentTerm),
 	)
 
@@ -121,6 +121,16 @@ func (c *Candidate) HandleRequestVotesTask(task *RequestVotesTask) {
 		task.reply.VoteFor = false
 	} else if currentTerm == peerTerm {
 		logger.Debug("RequestVote reject, voted in this term")
+		task.reply.VoteFor = false
+	} else if c.worker.state.IsLogAheadPeer(
+		task.args.LeaderLastLogIndex, task.args.LeaderLastLogTerm,
+	) {
+		logger.Debug("RequestVote reject, log ahead peer",
+			zap.Int("lastLogIndex", c.worker.state.logMngr.GetLastLogIndex()),
+			zap.Int("lastLogTerm", c.worker.state.logMngr.GetLastLogTerm()),
+			zap.Int("peerLastLogIndex", task.args.LeaderLastLogIndex),
+			zap.Int("peerLastLogIndex", task.args.LeaderLastLogTerm),
+		)
 		task.reply.VoteFor = false
 	} else {
 		c.worker.become(RoleFollower)
@@ -143,12 +153,7 @@ func (c *Candidate) HandleAppendEntriesTask(task *AppendEntriesTask) {
 	} else {
 		logger.Info("someone has won the election")
 		c.worker.become(RoleFollower)
-
-		if currentTerm < peerTerm {
-			c.worker.state.UpdateTerm(peerTerm)
-		}
-
-		// append entries
+		c.worker.state.SyncStateFromAppendEntriesTask(task)
 	}
 }
 

@@ -41,6 +41,7 @@ const (
 	Term            = "term"
 	Peer            = "peer"
 	Index           = "index"
+	PeerTerm        = "peer term"
 )
 
 const (
