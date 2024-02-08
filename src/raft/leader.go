@@ -78,21 +78,25 @@ func (l *Leader) HandleRequestVotesTask(task *RequestVotesTask) {
 	} else if currentTerm == peerTerm {
 		l.logger.Debug("RequestVote reject, I'm leader")
 		task.reply.VoteFor = false
-	} else if l.worker.state.IsLogAheadPeer(
-		task.args.LeaderLastLogIndex, task.args.LeaderLastLogTerm,
-	) {
-		logger.Debug("RequestVote reject, log ahead peer",
-			zap.Int("lastLogIndex", l.worker.state.logMngr.GetLastLogIndex()),
-			zap.Int("lastLogTerm", l.worker.state.logMngr.GetLastLogTerm()),
-			zap.Int("peerLastLogIndex", task.args.LeaderLastLogIndex),
-			zap.Int("peerLastLogIndex", task.args.LeaderLastLogTerm),
-		)
-		task.reply.VoteFor = false
 	} else {
-		logger.Debug("RequestVote granted")
-		l.worker.become(RoleFollower)
 		l.worker.state.UpdateTerm(peerTerm)
-		task.reply.VoteFor = true
+
+		if l.worker.state.IsLogAheadPeer(
+			task.args.LeaderLastLogIndex, task.args.LeaderLastLogTerm,
+		) {
+			logger.Debug("RequestVote reject, log ahead peer",
+				zap.Int("lastLogIndex", l.worker.state.logMngr.GetLastLogIndex()),
+				zap.Int("lastLogTerm", l.worker.state.logMngr.GetLastLogTerm()),
+				zap.Int("peerLastLogIndex", task.args.LeaderLastLogIndex),
+				zap.Int("peerLastLogIndex", task.args.LeaderLastLogTerm),
+			)
+			l.worker.become(RoleCandidate)
+			task.reply.VoteFor = false
+		} else {
+			logger.Debug("RequestVote granted")
+			l.worker.become(RoleFollower)
+			task.reply.VoteFor = true
+		}
 	}
 }
 

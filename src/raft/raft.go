@@ -336,7 +336,7 @@ LOOP:
 }
 
 func (rf *Raft) become(role RoleType) {
-	if rf.role.Type() == role {
+	if rf.role.Type() == role && rf.role.Type() != RoleCandidate {
 		panic(fmt.Errorf("can not transform to the same role, role=%s", role))
 	}
 
