@@ -67,84 +67,6 @@ type Role interface {
 	HandleRequestVotesTask(task *RequestVotesTask)
 }
 
-type StateManager struct {
-	committed int
-	term      int
-	logMngr   *LogManager
-}
-
-func (sm *StateManager) New() *StateManager {
-	return &StateManager{
-		committed: sm.committed,
-		term:      sm.term,
-		logMngr:   sm.logMngr.New(),
-	}
-}
-
-func (sm *StateManager) IsLogAheadPeer(peerLastLogIndex int, peerLastLogTerm int) bool {
-	if sm.logMngr.GetLastLogTerm() > peerLastLogTerm {
-		return true
-	} else if sm.logMngr.GetLastLogTerm() == peerLastLogTerm {
-		return sm.logMngr.GetLastLogIndex() > peerLastLogIndex
-	}
-	return false
-}
-
-func (sm *StateManager) GetCurrentTerm() int {
-	return sm.term
-}
-
-func (sm *StateManager) IncrTerm() {
-	sm.term++
-}
-
-func (sm *StateManager) UpdateTerm(newTerm int) {
-	if newTerm <= sm.term {
-		panic("new term should not be equal/smaller than current one")
-	}
-	sm.term = newTerm
-}
-
-func (sm *StateManager) UpdateCommitted(committed int) bool {
-	if sm.committed < committed {
-		sm.committed = committed
-		return true
-	}
-	return false
-}
-
-func (sm *StateManager) GetCommitted() int {
-	return sm.committed
-}
-
-func (sm *StateManager) StateBehindPeer(term int) bool {
-	if sm.term >= term {
-		return false
-	}
-	sm.term = term
-	return true
-}
-
-func (sm *StateManager) SyncStateFromAppendEntriesTask(task *AppendEntriesTask) {
-	currentTerm := sm.GetCurrentTerm()
-	peerTerm := task.args.Term
-
-	if currentTerm < peerTerm {
-		sm.UpdateTerm(peerTerm)
-	}
-	sm.UpdateCommitted(task.args.LeaderLastCommitted)
-
-	nextIndex, logAppended := sm.logMngr.AppendLogAndReturnNextIndex(
-		task.args.LastLogIndex,
-		task.args.LastLogTerm,
-		task.args.Logs,
-	)
-	// peer needs these for committing and deciding next log to send
-	task.reply.ExpectedNextIndex = nextIndex
-	task.reply.Success = logAppended
-	task.reply.Term = sm.GetCurrentTerm()
-}
-
 type Raft struct {
 	persister *Persister // Object to hold this peer's persisted state
 	me        int        // this peer's index into peers[]
@@ -193,7 +115,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		commitTicker:      time.NewTicker(200 * time.Millisecond),
 
 		applyMsgCh:    applyCh,
-		lastCommitted: -1,
+		lastCommitted: EmptyLogIndex,
 	}
 	worker.role = NewFollower(worker)
 

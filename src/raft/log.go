@@ -2,6 +2,11 @@ package raft
 
 import "go.uber.org/zap"
 
+const (
+	IndexStartFrom = 1
+	EmptyLogIndex  = 0
+)
+
 type LogEntry struct {
 	Index   int
 	Term    int
@@ -17,12 +22,12 @@ type LogManager struct {
 }
 
 func NewLogManager() *LogManager {
-	return &LogManager{
-		lastLogIndex: -1,
-		lastLogTerm:  -1,
-		logs:         make([]*LogEntry, 0, 10),
-		logger:       GetLoggerOrPanic("log mngr"),
+	lm := &LogManager{
+		logs:   make([]*LogEntry, 0, 10),
+		logger: GetLoggerOrPanic("log mngr"),
 	}
+	lm.reset()
+	return lm
 }
 
 func (lm *LogManager) New() *LogManager {
@@ -39,31 +44,37 @@ func (lm *LogManager) GetLastLogTerm() int {
 	return lm.lastLogTerm
 }
 
-func (lm *LogManager) GetLogByIndex(index int) (*LogEntry, error) {
-	if index < 0 {
+func (lm *LogManager) logIndexToInternalIndex(logIndex int) int {
+	return logIndex - 1
+}
+
+func (lm *LogManager) GetLogByIndex(logIndex int) (*LogEntry, error) {
+	if logIndex < IndexStartFrom {
 		panic(errorIllegalLogIndex)
 	}
-	if lm.GetLastLogIndex() < index {
+	if lm.GetLastLogIndex() < logIndex {
 		return nil, errorLogIndexOutOfRange
 	}
-	return lm.logs[index], nil
+	return lm.logs[lm.logIndexToInternalIndex(logIndex)], nil
 }
 
 // Truncate truncates the logs from n, keep [0:n)
-func (lm *LogManager) Truncate(index int) {
-	if index > lm.lastLogIndex+1 {
+func (lm *LogManager) Truncate(logIndex int) {
+	if logIndex > lm.lastLogIndex+1 {
 		panic("truncate: index bigger than lastLogIndex+1")
 	}
-	if index < 0 {
-		panic("truncate: index smaller than zero")
+	if logIndex < IndexStartFrom {
+		panic("truncate: index smaller than start index")
 	}
-	lm.logs = lm.logs[:index]
-	if index == 0 {
-		lm.lastLogTerm = -1
-		lm.lastLogIndex = -1
+
+	internalIndex := lm.logIndexToInternalIndex(logIndex)
+
+	lm.logs = lm.logs[:internalIndex]
+	if internalIndex == 0 {
+		lm.reset()
 	} else {
-		lm.lastLogTerm = lm.logs[len(lm.logs)-1].Term
-		lm.lastLogIndex = lm.logs[len(lm.logs)-1].Index
+		lastLog := lm.logs[len(lm.logs)-1]
+		lm.updateLastLog(lastLog.Term, lastLog.Index)
 	}
 }
 
@@ -73,11 +84,11 @@ func (lm *LogManager) AppendLogAndReturnNextIndex(lastLogIndex, lastLogTerm int,
 		return lm.GetLastLogIndex() + 1, false
 	}
 
-	match := func(index int, term int) bool {
-		if index == -1 {
+	match := func(logIndex int, term int) bool {
+		if logIndex < IndexStartFrom {
 			return true
 		}
-		mylog, err := lm.GetLogByIndex(index)
+		mylog, err := lm.GetLogByIndex(logIndex)
 		if err == errorLogIndexOutOfRange {
 			return false
 		}
@@ -114,4 +125,14 @@ func (lm *LogManager) appendOneLog(log *LogEntry) {
 	lm.logs = append(lm.logs, log)
 	lm.lastLogIndex = log.Index
 	lm.lastLogTerm = log.Term
+}
+
+func (lm *LogManager) reset() {
+	lm.lastLogTerm = -1
+	lm.lastLogIndex = EmptyLogIndex
+}
+
+func (lm *LogManager) updateLastLog(term, index int) {
+	lm.lastLogTerm = term
+	lm.lastLogIndex = index
 }

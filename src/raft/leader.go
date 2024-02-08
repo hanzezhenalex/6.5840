@@ -130,15 +130,16 @@ func (l *Leader) UpdateCommittedIndex() {
 		return committed[i] < committed[j]
 	})
 
-	tryToCommit := int(committed[len(committed)/2])
-	log, err := l.worker.state.logMngr.GetLogByIndex(tryToCommit)
-	if err != nil {
-		panic(err)
-	}
+	if tryToCommit := int(committed[len(committed)/2]); tryToCommit >= IndexStartFrom {
+		log, err := l.worker.state.logMngr.GetLogByIndex(tryToCommit)
+		if err != nil {
+			panic(err)
+		}
 
-	// only commit logs in this term
-	if log.Term == l.term && l.worker.state.UpdateCommitted(tryToCommit) {
-		l.UpdateReplicatorState()
+		// only commit logs in this term
+		if log.Term == l.term && l.worker.state.UpdateCommitted(tryToCommit) {
+			l.UpdateReplicatorState()
+		}
 	}
 }
 
@@ -182,8 +183,8 @@ func NewReplicator(
 
 func (rp *replicator) initNextIndex() {
 	rp.nextIndex = rp.state.Load().(*StateManager).logMngr.GetLastLogIndex()
-	if rp.nextIndex < 0 {
-		rp.nextIndex = 0
+	if rp.nextIndex == 0 { // no log in the state mngr
+		rp.nextIndex = 1
 	}
 }
 
@@ -249,7 +250,7 @@ func (rp *replicator) fillAppendEntriesArgs() (AppendEntryArgs, bool) {
 	}
 	args.Logs = expectedLog
 
-	if previous := rp.nextIndex - 1; previous >= 0 {
+	if previous := rp.nextIndex - 1; previous >= IndexStartFrom {
 		previousLog, err := stateMngr.logMngr.GetLogByIndex(previous)
 		if err == errorLogIndexOutOfRange {
 			panic(fmt.Sprintf("previous log index should not out of range, index=%d", previous))
@@ -258,7 +259,7 @@ func (rp *replicator) fillAppendEntriesArgs() (AppendEntryArgs, bool) {
 		args.LastLogIndex = previousLog.Index
 		args.LastLogTerm = previousLog.Term
 	} else {
-		args.LastLogIndex = -1
+		args.LastLogIndex = EmptyLogIndex
 		args.LastLogTerm = -1
 	}
 	return args, true
