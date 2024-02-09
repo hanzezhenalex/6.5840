@@ -80,6 +80,7 @@ func (l *Leader) HandleRequestVotesTask(task *RequestVotesTask) {
 		task.reply.VoteFor = false
 	} else {
 		l.worker.state.UpdateTerm(peerTerm)
+		l.worker.context.MarkStateChanged()
 
 		if l.worker.state.IsLogAheadPeer(
 			task.args.LeaderLastLogIndex, task.args.LeaderLastLogTerm,
@@ -117,6 +118,7 @@ func (l *Leader) HandleAppendEntriesTask(task *AppendEntriesTask) {
 		logger.Info("found new leader")
 		l.worker.become(RoleFollower)
 		l.worker.state.SyncStateFromAppendEntriesTask(task)
+		l.worker.context.MarkStateChanged()
 	}
 }
 

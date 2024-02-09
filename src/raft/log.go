@@ -145,3 +145,15 @@ func (lm *LogManager) updateLastLog(term, index int) {
 	lm.lastLogTerm = term
 	lm.lastLogIndex = index
 }
+
+func (lm *LogManager) Encode(encoder func(val interface{})) {
+	encoder(lm.lastLogTerm)
+	encoder(lm.lastLogIndex)
+	encoder(lm.logs)
+}
+
+func (lm *LogManager) Recover(decoder func(p interface{})) {
+	decoder(&lm.lastLogTerm)
+	decoder(&lm.lastLogIndex)
+	decoder(&lm.logs)
+}
