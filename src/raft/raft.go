@@ -67,34 +67,6 @@ type Role interface {
 	HandleRequestVotesTask(task *RequestVotesTask)
 }
 
-type StateManager struct {
-	term    int
-	logMngr *LogManager
-}
-
-func (sm *StateManager) GetCurrentTerm() int {
-	return sm.term
-}
-
-func (sm *StateManager) IncrTerm() {
-	sm.term++
-}
-
-func (sm *StateManager) UpdateTerm(newTerm int) {
-	if newTerm <= sm.term {
-		panic("new term should not be equal/smaller than current one")
-	}
-	sm.term = newTerm
-}
-
-func (sm *StateManager) StateBehindPeer(term int) bool {
-	if sm.term >= term {
-		return false
-	}
-	sm.term = term
-	return true
-}
-
 type Raft struct {
 	persister *Persister // Object to hold this peer's persisted state
 	me        int        // this peer's index into peers[]
@@ -107,11 +79,16 @@ type Raft struct {
 	timeout           time.Duration
 	heartBeatInterval time.Duration
 
-	stopCh          chan struct{}
-	appendEntriesCh chan *AppendEntriesTask
-	requestVoteCh   chan *RequestVotesTask
-	getStateCh      chan *StateTask
-	notifyCh        chan struct{}
+	stopCh            chan struct{}
+	appendEntriesCh   chan *AppendEntriesTask
+	requestVoteCh     chan *RequestVotesTask
+	getStateCh        chan *StateTask
+	storeNewCommandCh chan *StoreNewCommandTask
+	notifyCh          chan struct{}
+	commitTicker      *time.Ticker
+
+	lastApplied int
+	applyMsgCh  chan ApplyMsg
 }
 
 func Make(peers []*labrpc.ClientEnd, me int,
@@ -119,8 +96,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	worker := &Raft{
 		me: me,
 		state: &StateManager{
-			term:    0,
-			logMngr: NewLogManager(),
+			committed: EmptyLogIndex,
+			term:      0,
+			logMngr:   NewLogManager(me),
 		},
 		peers: peers,
 		logger: GetLoggerOrPanic("raft").
@@ -128,11 +106,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		timeout:           time.Duration(150+(rand.Int63()%150)) * time.Millisecond,
 		heartBeatInterval: time.Duration(100) * time.Millisecond,
 
-		stopCh:          make(chan struct{}),
-		appendEntriesCh: make(chan *AppendEntriesTask),
-		requestVoteCh:   make(chan *RequestVotesTask),
-		getStateCh:      make(chan *StateTask),
-		notifyCh:        make(chan struct{}),
+		stopCh:            make(chan struct{}),
+		appendEntriesCh:   make(chan *AppendEntriesTask),
+		requestVoteCh:     make(chan *RequestVotesTask),
+		getStateCh:        make(chan *StateTask),
+		storeNewCommandCh: make(chan *StoreNewCommandTask),
+		notifyCh:          make(chan struct{}),
+		commitTicker:      time.NewTicker(200 * time.Millisecond),
+
+		applyMsgCh:  applyCh,
+		lastApplied: EmptyLogIndex,
 	}
 	worker.role = NewFollower(worker)
 
@@ -202,16 +185,54 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 }
 
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	log := &LogEntry{
+		Index:   -1,
+		Term:    -1,
+		Command: command,
+	}
+	task := &StoreNewCommandTask{
+		Log: log,
+	}
+	task.wg.Add(1)
 
-	// Your code here (2B).
+	select {
+	case <-rf.stopCh:
+		return -1, -1, false
+	case rf.storeNewCommandCh <- task:
+	}
 
-	return index, term, isLeader
+	task.wg.Wait()
+	rf.logger.Info(
+		"store new command",
+		zap.Bool("success", task.Success),
+		zap.String("command", fmt.Sprintf("%#v", log)),
+	)
+	return log.Index, log.Term, task.Success
 }
 
 func (rf *Raft) Kill() { close(rf.stopCh) }
+
+type StoreNewCommandTask struct {
+	Success bool
+	Log     *LogEntry
+	wg      sync.WaitGroup
+}
+
+func (rf *Raft) handleStoreNewCommandTask(task *StoreNewCommandTask) {
+	defer task.wg.Done()
+
+	if rf.role.Type() == RoleLeader {
+		rf.state.logMngr.AppendNewLog(rf.state.GetCurrentTerm(), task.Log.Command)
+		rf.role.(*Leader).UpdateReplicatorState()
+
+		task.Log.Term = rf.state.GetCurrentTerm()
+		task.Log.Index = rf.state.logMngr.GetLastLogIndex()
+
+		task.Success = true
+	} else {
+		task.Success = false
+	}
+}
 
 type State struct {
 	term     int
@@ -274,14 +295,48 @@ LOOP:
 			rf.role.HandleNotify()
 		case task := <-rf.getStateCh:
 			task.ch <- rf.handleGetStateTask()
+		case task := <-rf.storeNewCommandCh:
+			rf.handleStoreNewCommandTask(task)
+		case <-rf.commitTicker.C:
+			rf.apply()
 		}
 	}
 
 	rf.role.StopDaemon()
 }
 
+func (rf *Raft) apply() {
+	if rf.role.Type() == RoleLeader {
+		rf.role.(*Leader).UpdateCommittedIndex()
+	}
+
+	oldLastCommitted := rf.lastApplied
+
+LOOP:
+	for i := rf.lastApplied + 1; i <= rf.state.committed; i++ {
+		log, err := rf.state.logMngr.GetLogByIndex(i)
+		if err != nil {
+			break LOOP
+		}
+		rf.applyMsgCh <- ApplyMsg{
+			Command:      log.Command,
+			CommandValid: true,
+			CommandIndex: log.Index,
+		}
+		rf.lastApplied++
+	}
+
+	if oldLastCommitted != rf.lastApplied {
+		rf.logger.Info(
+			"log committed",
+			zap.Int("old", oldLastCommitted),
+			zap.Int("current", rf.lastApplied),
+		)
+	}
+}
+
 func (rf *Raft) become(role RoleType) {
-	if rf.role.Type() == role {
+	if rf.role.Type() == role && rf.role.Type() != RoleCandidate {
 		panic(fmt.Errorf("can not transform to the same role, role=%s", role))
 	}
 
@@ -339,4 +394,10 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) error
 func (rf *Raft) Notify(msg string) {
 	rf.logger.Debug("notify worker", zap.String("reason", msg))
 	go func() { rf.notifyCh <- struct{}{} }()
+}
+
+func handleTermBehindRequest(worker *Raft, reply *AppendEntryReply, logger *zap.Logger) {
+	logger.Debug("AppendEntries reject, term ahead")
+	reply.Term = worker.state.GetCurrentTerm()
+	reply.ExpectedNextIndex = worker.state.logMngr.GetLastLogIndex()
 }

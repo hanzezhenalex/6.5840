@@ -76,8 +76,18 @@ func (f *Follower) HandleRequestVotesTask(task *RequestVotesTask) {
 	} else if currentTerm == peerTerm {
 		logger.Debug("RequestVote reject, has voted in this term")
 		task.reply.VoteFor = false
+	} else if f.worker.state.IsLogAheadPeer(
+		task.args.LeaderLastLogIndex, task.args.LeaderLastLogTerm,
+	) {
+		logger.Debug("RequestVote reject, log ahead peer",
+			zap.Int("lastLogIndex", f.worker.state.logMngr.GetLastLogIndex()),
+			zap.Int("lastLogTerm", f.worker.state.logMngr.GetLastLogTerm()),
+			zap.Int("peerLastLogIndex", task.args.LeaderLastLogIndex),
+			zap.Int("peerLastLogIndex", task.args.LeaderLastLogTerm),
+		)
+		task.reply.VoteFor = false
 	} else {
-		logger.Debug("vote granted")
+		logger.Debug("RequestVote granted")
 		task.reply.VoteFor = true
 
 		f.resetTimer(logger)
@@ -95,15 +105,10 @@ func (f *Follower) HandleAppendEntriesTask(task *AppendEntriesTask) {
 	)
 
 	if currentTerm > peerTerm {
-		logger.Debug("AppendEntries reject, term ahead")
+		handleTermBehindRequest(f.worker, task.reply, logger)
 	} else {
 		f.resetTimer(logger)
-
-		if currentTerm < peerTerm {
-			f.worker.state.UpdateTerm(peerTerm)
-		}
-
-		// append entries
+		f.worker.state.SyncStateFromAppendEntriesTask(task)
 	}
 }
 
