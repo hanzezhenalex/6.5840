@@ -7,17 +7,16 @@ import (
 )
 
 func GetBaseLogger() (*zap.Logger, error) {
+	cfg := zap.NewDevelopmentConfig()
+
 	if os.Getenv("MR_PROD") == "true" {
-		cfg := zap.NewProductionConfig()
-
-		cfg.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
+		cfg.Level = zap.NewAtomicLevelAt(zap.FatalLevel)
+	} else {
+		cfg.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
 		cfg.DisableStacktrace = true
-		cfg.DisableCaller = true
-		cfg.Development = false
-
-		return cfg.Build()
 	}
-	return zap.NewDevelopment()
+
+	return cfg.Build()
 }
 
 func GetLogger(component string) (*zap.Logger, error) {
@@ -40,7 +39,8 @@ const (
 	LoggerComponent = "component"
 	Term            = "term"
 	Peer            = "peer"
-	Index           = "index"
+	Index           = "me"
+	PeerTerm        = "peer term"
 )
 
 const (

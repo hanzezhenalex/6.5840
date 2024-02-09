@@ -1,26 +1,35 @@
 package raft
 
 type RequestVoteArgs struct {
-	Term int
-	Me   int
+	Me int
+	// for vote
+	Term               int
+	LeaderLastLogIndex int
+	LeaderLastLogTerm  int
 }
 
 type RequestVoteReply struct {
 	Term    int
-	VoteFor bool
+	VoteFor bool // whether voted
 }
 
 type AppendEntryArgs struct {
-	Term          int
-	Me            int
-	LastCommitted int
-	LastLogIndex  int
-	LastLogTerm   int
+	Me                  int
+	LeaderLastCommitted int
 
-	Logs []LogEntry
+	// for leadership confirm
+	Term               int
+	LeaderLastLogIndex int
+	LeaderLastLogTerm  int
+
+	// for log replication
+	LastLogTerm  int
+	LastLogIndex int
+	Logs         *LogEntry
 }
 
 type AppendEntryReply struct {
 	Term              int
 	ExpectedNextIndex int
+	Success           bool
 }

@@ -1,6 +1,9 @@
 package raft
 
 import (
+	"fmt"
+	"sort"
+	"sync/atomic"
 	"time"
 
 	"6.5840/labrpc"
@@ -15,6 +18,8 @@ type Leader struct {
 
 	stopCh chan struct{}
 	peers  []*replicator
+	// shared StateManager for replicators
+	replicatorStateMngr *atomic.Value
 }
 
 func NewLeader(worker *Raft) *Leader {
@@ -23,15 +28,21 @@ func NewLeader(worker *Raft) *Leader {
 		logger: GetLoggerOrPanic("leader").
 			With(zap.Int(Term, worker.state.GetCurrentTerm())).
 			With(zap.Int(Index, worker.me)),
-		stopCh: make(chan struct{}),
-		term:   worker.state.GetCurrentTerm(),
+		stopCh:              make(chan struct{}),
+		term:                worker.state.GetCurrentTerm(),
+		replicatorStateMngr: new(atomic.Value),
 	}
+
+	leader.replicatorStateMngr.Store(worker.state.New())
 
 	for index, p := range worker.peers {
 		if index == worker.me {
 			continue
 		}
-		leader.peers = append(leader.peers, NewReplicator(index, p, worker, leader.stopCh))
+		leader.peers = append(
+			leader.peers,
+			NewReplicator(index, p, worker, leader.stopCh, leader.replicatorStateMngr),
+		)
 	}
 	return leader
 }
@@ -68,10 +79,24 @@ func (l *Leader) HandleRequestVotesTask(task *RequestVotesTask) {
 		l.logger.Debug("RequestVote reject, I'm leader")
 		task.reply.VoteFor = false
 	} else {
-		logger.Debug("vote granted")
-		l.worker.become(RoleFollower)
 		l.worker.state.UpdateTerm(peerTerm)
-		task.reply.VoteFor = true
+
+		if l.worker.state.IsLogAheadPeer(
+			task.args.LeaderLastLogIndex, task.args.LeaderLastLogTerm,
+		) {
+			logger.Debug("RequestVote reject, log ahead peer",
+				zap.Int("lastLogIndex", l.worker.state.logMngr.GetLastLogIndex()),
+				zap.Int("lastLogTerm", l.worker.state.logMngr.GetLastLogTerm()),
+				zap.Int("peerLastLogIndex", task.args.LeaderLastLogIndex),
+				zap.Int("peerLastLogIndex", task.args.LeaderLastLogTerm),
+			)
+			l.worker.become(RoleCandidate)
+			task.reply.VoteFor = false
+		} else {
+			logger.Debug("RequestVote granted")
+			l.worker.become(RoleFollower)
+			task.reply.VoteFor = true
+		}
 	}
 }
 
@@ -85,15 +110,40 @@ func (l *Leader) HandleAppendEntriesTask(task *AppendEntriesTask) {
 	)
 
 	if currentTerm > peerTerm {
-		logger.Debug("AppendEntries reject, term ahead")
+		handleTermBehindRequest(l.worker, task.reply, logger)
 	} else if currentTerm == peerTerm {
 		panic("two leaders in one term")
 	} else {
 		logger.Info("found new leader")
 		l.worker.become(RoleFollower)
-		l.worker.state.UpdateTerm(peerTerm)
+		l.worker.state.SyncStateFromAppendEntriesTask(task)
+	}
+}
 
-		// append entries
+func (l *Leader) UpdateReplicatorState() {
+	l.replicatorStateMngr.Store(l.worker.state.New())
+}
+
+func (l *Leader) UpdateCommittedIndex() {
+	committed := make([]int32, 0, len(l.peers))
+
+	for _, peer := range l.peers {
+		committed = append(committed, atomic.LoadInt32(&peer.replicated))
+	}
+	sort.Slice(committed, func(i, j int) bool {
+		return committed[i] < committed[j]
+	})
+
+	if tryToCommit := int(committed[len(committed)/2]); tryToCommit >= IndexStartFrom {
+		log, err := l.worker.state.logMngr.GetLogByIndex(tryToCommit)
+		if err != nil {
+			panic(err)
+		}
+
+		// only commit logs in this term
+		if log.Term == l.term && l.worker.state.UpdateCommitted(tryToCommit) {
+			l.UpdateReplicatorState()
+		}
 	}
 }
 
@@ -103,36 +153,51 @@ type replicator struct {
 	peerIndex int
 	peer      *labrpc.ClientEnd
 
-	logger    *zap.Logger
-	log       *LogManager
-	nextIndex int
+	logger     *zap.Logger
+	state      *atomic.Value
+	nextIndex  int
+	replicated int32
 
-	stopCh   chan struct{}
-	interval time.Duration
-	timeout  time.Duration
+	stopCh  chan struct{}
+	timeout time.Duration
 }
 
 func NewReplicator(
-	peerIndex int, peer *labrpc.ClientEnd, worker *Raft, stopCh chan struct{},
+	peerIndex int,
+	peer *labrpc.ClientEnd,
+	worker *Raft,
+	stopCh chan struct{},
+	stateMngr *atomic.Value,
 ) *replicator {
 	return &replicator{
 		term:      worker.state.GetCurrentTerm(),
 		me:        worker.me,
 		peerIndex: peerIndex,
 		peer:      peer,
-		log:       NewLogManager(),
+		state:     stateMngr,
 		logger: GetLoggerOrPanic("replicator").
 			With(zap.Int(Peer, peerIndex)).
 			With(zap.Int(Term, worker.state.GetCurrentTerm())).
 			With(zap.Int(Index, worker.me)),
-		stopCh:   stopCh,
-		interval: worker.heartBeatInterval,
-		timeout:  2 * time.Second,
+		stopCh:     stopCh,
+		timeout:    worker.heartBeatInterval,
+		replicated: EmptyLogIndex,
+	}
+}
+
+func (rp *replicator) initNextIndex() {
+	// replicator has to make sure that DO NOT send empty log when matching
+	// if not, wrong logs could be committed, see src/raft/state.go:79
+	rp.nextIndex = rp.state.Load().(*StateManager).logMngr.GetLastLogIndex()
+	if rp.nextIndex == 0 { // no log in the state mngr
+		rp.nextIndex = IndexStartFrom
 	}
 }
 
 func (rp *replicator) daemon() {
-	timer := time.NewTimer(rp.interval)
+	rp.initNextIndex()
+	rp.syncLogsWithPeer()
+	timer := time.NewTimer(rp.timeout)
 
 	for {
 		select {
@@ -141,41 +206,94 @@ func (rp *replicator) daemon() {
 			return
 		case <-timer.C:
 			rp.syncLogsWithPeer()
-			timer.Reset(rp.interval)
+			timer.Reset(rp.timeout)
 		}
 	}
 }
 
 func (rp *replicator) syncLogsWithPeer() {
 	rp.logger.Info("replicator start sync")
+	continueSending := true
 
-	args := AppendEntryArgs{
-		Term:          rp.term,
-		Me:            rp.me,
-		LastCommitted: rp.log.lastCommitted,
-		LastLogIndex:  rp.log.lastLogIndex,
-		LastLogTerm:   rp.log.lastLogTerm,
-	}
-	var reply AppendEntryReply
+	for continueSending {
+		var (
+			args  AppendEntryArgs
+			reply AppendEntryReply
+		)
+		args, continueSending = rp.fillAppendEntriesArgs()
+		rp.logger.Debug(
+			"AppendEntries args",
+			zap.String("v", fmt.Sprintf("%#v", args)),
+			zap.String("log", fmt.Sprintf("%#v", args.Logs)),
+		)
 
-	if stopOnTimeout := rp.withTimeout(func() {
-		rp.logger.Info("call RPC for sync logs")
-		if ok := rp.peer.Call("Raft.AppendEntries", args, &reply); !ok {
-			rp.logger.Warn("fail to send RPC request to peer")
+		if err := rp.withTimeout(func() error {
+			//rp.logger.Debug("call RPC for sync logs")
+			if ok := rp.peer.Call("Raft.AppendEntries", args, &reply); !ok {
+				return errorSendReqToPeer
+			}
+			return nil
+		}); err != nil {
+			rp.logger.Warn(
+				"an error happened when sending RPC request to peer",
+				zap.Error(err),
+			)
+			return
 		}
-	}); stopOnTimeout {
-		rp.logger.Warn("timeout sending RPC request to peer")
-		return
-	}
 
+		rp.logger.Debug(
+			"AppendEntries reply",
+			zap.String("v", fmt.Sprintf("%#v", reply)),
+		)
+		rp.nextIndex = reply.ExpectedNextIndex
+		if reply.Success {
+			atomic.StoreInt32(&rp.replicated, int32(args.Logs.Index))
+		}
+		if reply.Term > rp.term {
+			continueSending = false
+		}
+	}
 }
 
-func (rp *replicator) withTimeout(fn func()) bool {
+func (rp *replicator) fillAppendEntriesArgs() (AppendEntryArgs, bool) {
+	stateMngr := rp.state.Load().(*StateManager)
+	args := AppendEntryArgs{
+		Term:                rp.term,
+		Me:                  rp.me,
+		LeaderLastCommitted: stateMngr.GetCommitted(),
+		LeaderLastLogIndex:  stateMngr.logMngr.GetLastLogIndex(),
+		LeaderLastLogTerm:   stateMngr.logMngr.GetLastLogTerm(),
+	}
+
+	expectedLog, err := stateMngr.logMngr.GetLogByIndex(rp.nextIndex)
+	if err == errorLogIndexOutOfRange {
+		rp.logger.Info("all logs replicated to peer, heartbeat only")
+		return args, false
+	}
+	args.Logs = expectedLog
+
+	if previous := rp.nextIndex - 1; previous >= IndexStartFrom {
+		previousLog, err := stateMngr.logMngr.GetLogByIndex(previous)
+		if err == errorLogIndexOutOfRange {
+			panic(fmt.Sprintf("previous log index should not out of range, index=%d", previous))
+		}
+
+		args.LastLogIndex = previousLog.Index
+		args.LastLogTerm = previousLog.Term
+	} else {
+		args.LastLogIndex = EmptyLogIndex
+		args.LastLogTerm = -1
+	}
+	return args, true
+}
+
+func (rp *replicator) withTimeout(fn func() error) error {
 	timer := time.NewTimer(rp.timeout)
 	done := make(chan struct{})
+	var err error
 
 	go func() {
-		fn()
+		err = fn()
 		select {
 		case <-timer.C:
 		default:
@@ -186,8 +304,8 @@ func (rp *replicator) withTimeout(fn func()) bool {
 
 	select {
 	case <-timer.C:
-		return true
+		return errorTimeout
 	case <-done:
-		return false
+		return err
 	}
 }
