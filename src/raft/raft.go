@@ -399,5 +399,5 @@ func (rf *Raft) Notify(msg string) {
 func handleTermBehindRequest(worker *Raft, reply *AppendEntryReply, logger *zap.Logger) {
 	logger.Debug("AppendEntries reject, term ahead")
 	reply.Term = worker.state.GetCurrentTerm()
-	reply.ExpectedNextIndex = worker.state.logMngr.GetLastLogIndex()
+	reply.ExpectedNextIndex = worker.state.logMngr.GetLastLogIndex() + 1
 }
