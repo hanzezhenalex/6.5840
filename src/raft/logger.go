@@ -3,13 +3,18 @@ package raft
 import (
 	"fmt"
 	"go.uber.org/zap"
+	"os"
 )
 
 func GetBaseLogger() (*zap.Logger, error) {
 	cfg := zap.NewDevelopmentConfig()
 
-	cfg.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
-	cfg.DisableStacktrace = true
+	if os.Getenv("MR_PROD") == "true" {
+		cfg.Level = zap.NewAtomicLevelAt(zap.FatalLevel)
+	} else {
+		cfg.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
+		cfg.DisableStacktrace = true
+	}
 
 	return cfg.Build()
 }
