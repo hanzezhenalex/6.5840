@@ -937,6 +937,8 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		}
 	}
 
+	cfg.setlongreordering(false)
+	cfg.setunreliable(false)
 	cfg.one(rand.Int()%10000, servers, true)
 
 	cfg.end()
