@@ -353,6 +353,14 @@ LOOP:
 	for i := rf.lastApplied + 1; i <= rf.state.committed; i++ {
 		log, err := rf.state.logMngr.GetLogByIndex(i)
 		if err != nil {
+			if err == errorLogIndexOutOfRange {
+				rf.logger.Debug(
+					"committed is larger than existing",
+					zap.Int("i", i),
+					zap.Int("committed", rf.state.committed),
+				)
+			}
+
 			break LOOP
 		}
 		rf.applyMsgCh <- ApplyMsg{
@@ -370,6 +378,11 @@ LOOP:
 			zap.Int("current", rf.lastApplied),
 		)
 		rf.context.MarkStateChanged()
+	} else {
+		rf.logger.Debug("no log committed",
+			zap.Int("last applied", rf.lastApplied),
+			zap.Int("committed", rf.state.committed),
+		)
 	}
 }
 

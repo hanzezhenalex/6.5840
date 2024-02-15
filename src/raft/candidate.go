@@ -61,7 +61,7 @@ LOOP:
 			atomic.CompareAndSwapInt32(&c.status, inElection, electionTimeout)
 			c.worker.Notify(candidateTimeout)
 		case <-c.stopCh:
-			c.logger.Debug("shutdown")
+			c.logger.Debug("candidate stopped")
 			break LOOP
 		case id := <-c.success:
 			if id == atomic.LoadInt64(&c.currentElectionID) {
