@@ -119,7 +119,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		me: me,
 		state: &StateManager{
 			committed: EmptyLogIndex,
-			term:      0,
+			term:      TermStartFrom,
 			logMngr:   NewLogManager(me),
 		},
 		peers: peers,
@@ -195,7 +195,7 @@ func (rf *Raft) readPersist(data []byte) {
 	d := labgob.NewDecoder(r)
 	recoverOrPanic := func(p interface{}) {
 		if reflect.TypeOf(p).Kind() != reflect.Pointer {
-			panic("")
+			panic("decode only receive a pointer type")
 		}
 		if err := d.Decode(p); err != nil {
 			panic(err)

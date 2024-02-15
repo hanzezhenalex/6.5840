@@ -9,6 +9,7 @@ import (
 const (
 	IndexStartFrom = 1
 	EmptyLogIndex  = 0
+	TermStartFrom  = 0
 )
 
 type LogEntry struct {
@@ -27,6 +28,9 @@ type LogManager struct {
 
 func NewLogManager(me int) *LogManager {
 	lm := &LogManager{
+		lastLogIndex: EmptyLogIndex,
+		lastLogTerm:  TermStartFrom,
+
 		logs:   make([]*LogEntry, 0, 10),
 		logger: GetLoggerOrPanic("log mngr").With(zap.Int(Index, me)),
 	}

@@ -191,7 +191,7 @@ func (rp *replicator) initNextIndex() {
 	// replicator has to make sure that DO NOT send empty log when matching
 	// if not, wrong logs could be committed, see src/raft/state.go:79
 	rp.nextIndex = rp.state.Load().(*StateManager).logMngr.GetLastLogIndex()
-	if rp.nextIndex == 0 { // no log in the state mngr
+	if rp.nextIndex == EmptyLogIndex { // no log in the state mngr
 		rp.nextIndex = IndexStartFrom
 	}
 }
