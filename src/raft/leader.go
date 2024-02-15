@@ -80,6 +80,7 @@ func (l *Leader) HandleRequestVotesTask(task *RequestVotesTask) {
 		task.reply.VoteFor = false
 	} else {
 		l.worker.state.UpdateTerm(peerTerm)
+		l.worker.context.MarkStateChanged()
 
 		if l.worker.state.IsLogAheadPeer(
 			task.args.LeaderLastLogIndex, task.args.LeaderLastLogTerm,
@@ -117,6 +118,7 @@ func (l *Leader) HandleAppendEntriesTask(task *AppendEntriesTask) {
 		logger.Info("found new leader")
 		l.worker.become(RoleFollower)
 		l.worker.state.SyncStateFromAppendEntriesTask(task)
+		l.worker.context.MarkStateChanged()
 	}
 }
 
@@ -189,7 +191,7 @@ func (rp *replicator) initNextIndex() {
 	// replicator has to make sure that DO NOT send empty log when matching
 	// if not, wrong logs could be committed, see src/raft/state.go:79
 	rp.nextIndex = rp.state.Load().(*StateManager).logMngr.GetLastLogIndex()
-	if rp.nextIndex == 0 { // no log in the state mngr
+	if rp.nextIndex == EmptyLogIndex { // no log in the state mngr
 		rp.nextIndex = IndexStartFrom
 	}
 }

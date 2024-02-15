@@ -18,8 +18,11 @@ package raft
 //
 
 import (
+	"6.5840/labgob"
+	"bytes"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"sync"
 	"time"
 
@@ -67,6 +70,22 @@ type Role interface {
 	HandleRequestVotesTask(task *RequestVotesTask)
 }
 
+type TaskContext struct {
+	stateChanged bool
+}
+
+func (c *TaskContext) MarkStateChanged() {
+	c.stateChanged = true
+}
+
+func (c *TaskContext) StateChanged() bool {
+	return c.stateChanged
+}
+
+func (c *TaskContext) Reset() {
+	c.stateChanged = false
+}
+
 type Raft struct {
 	persister *Persister // Object to hold this peer's persisted state
 	me        int        // this peer's index into peers[]
@@ -89,6 +108,9 @@ type Raft struct {
 
 	lastApplied int
 	applyMsgCh  chan ApplyMsg
+
+	// task specified
+	context *TaskContext
 }
 
 func Make(peers []*labrpc.ClientEnd, me int,
@@ -97,7 +119,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		me: me,
 		state: &StateManager{
 			committed: EmptyLogIndex,
-			term:      0,
+			term:      TermStartFrom,
 			logMngr:   NewLogManager(me),
 		},
 		peers: peers,
@@ -105,6 +127,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			With(zap.Int(Index, me)),
 		timeout:           time.Duration(150+(rand.Int63()%150)) * time.Millisecond,
 		heartBeatInterval: time.Duration(100) * time.Millisecond,
+		persister:         persistent,
 
 		stopCh:            make(chan struct{}),
 		appendEntriesCh:   make(chan *AppendEntriesTask),
@@ -116,6 +139,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 		applyMsgCh:  applyCh,
 		lastApplied: EmptyLogIndex,
+		context:     &TaskContext{stateChanged: false},
 	}
 	worker.role = NewFollower(worker)
 
@@ -145,14 +169,20 @@ func (rf *Raft) GetState() (int, bool) {
 // after you've implemented snapshots, pass the current snapshot
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// raftstate := w.Bytes()
-	// rf.persister.Save(raftstate, nil)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	encodeOrPanic := func(val interface{}) {
+		if err := e.Encode(val); err != nil {
+			panic(err)
+		}
+	}
+	// store state
+	encodeOrPanic(rf.lastApplied)
+	rf.state.Encode(encodeOrPanic)
+
+	state := w.Bytes()
+	rf.persister.Save(state, nil)
+	rf.logger.Debug("state persisted")
 }
 
 // restore previously persisted state.
@@ -160,19 +190,20 @@ func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	recoverOrPanic := func(p interface{}) {
+		if reflect.TypeOf(p).Kind() != reflect.Pointer {
+			panic("decode only receive a pointer type")
+		}
+		if err := d.Decode(p); err != nil {
+			panic(err)
+		}
+	}
+
+	recoverOrPanic(&rf.lastApplied)
+	rf.state.Recover(recoverOrPanic)
 }
 
 // the service says it has created a snapshot that has
@@ -229,6 +260,7 @@ func (rf *Raft) handleStoreNewCommandTask(task *StoreNewCommandTask) {
 		task.Log.Index = rf.state.logMngr.GetLastLogIndex()
 
 		task.Success = true
+		rf.context.MarkStateChanged()
 	} else {
 		task.Success = false
 	}
@@ -300,6 +332,11 @@ LOOP:
 		case <-rf.commitTicker.C:
 			rf.apply()
 		}
+
+		if rf.context.StateChanged() {
+			rf.persist()
+		}
+		rf.context.Reset()
 	}
 
 	rf.role.StopDaemon()
@@ -316,6 +353,14 @@ LOOP:
 	for i := rf.lastApplied + 1; i <= rf.state.committed; i++ {
 		log, err := rf.state.logMngr.GetLogByIndex(i)
 		if err != nil {
+			if err == errorLogIndexOutOfRange {
+				rf.logger.Debug(
+					"committed is larger than existing",
+					zap.Int("i", i),
+					zap.Int("committed", rf.state.committed),
+				)
+			}
+
 			break LOOP
 		}
 		rf.applyMsgCh <- ApplyMsg{
@@ -331,6 +376,12 @@ LOOP:
 			"log committed",
 			zap.Int("old", oldLastCommitted),
 			zap.Int("current", rf.lastApplied),
+		)
+		rf.context.MarkStateChanged()
+	} else {
+		rf.logger.Debug("no log committed",
+			zap.Int("last applied", rf.lastApplied),
+			zap.Int("committed", rf.state.committed),
 		)
 	}
 }

@@ -47,6 +47,7 @@ func (c *Candidate) HandleNotify() {
 	} else if atomic.CompareAndSwapInt32(&c.status, electionTimeout, inElection) {
 		c.worker.state.IncrTerm()
 		c.startNewSelection()
+		c.worker.context.MarkStateChanged()
 	}
 }
 
@@ -60,7 +61,7 @@ LOOP:
 			atomic.CompareAndSwapInt32(&c.status, inElection, electionTimeout)
 			c.worker.Notify(candidateTimeout)
 		case <-c.stopCh:
-			c.logger.Debug("shutdown")
+			c.logger.Debug("candidate stopped")
 			break LOOP
 		case id := <-c.success:
 			if id == atomic.LoadInt64(&c.currentElectionID) {
@@ -121,6 +122,7 @@ func (c *Candidate) HandleRequestVotesTask(task *RequestVotesTask) {
 		logger.Debug("RequestVote reject, voted in this term")
 		task.reply.VoteFor = false
 	} else {
+		c.worker.context.MarkStateChanged()
 		c.worker.state.UpdateTerm(peerTerm)
 
 		if c.worker.state.IsLogAheadPeer(
@@ -154,6 +156,7 @@ func (c *Candidate) HandleAppendEntriesTask(task *AppendEntriesTask) {
 	if currentTerm > peerTerm {
 		handleTermBehindRequest(c.worker, task.reply, logger)
 	} else {
+		c.worker.context.MarkStateChanged()
 		logger.Info("someone has won the election")
 		c.worker.become(RoleFollower)
 		c.worker.state.SyncStateFromAppendEntriesTask(task)

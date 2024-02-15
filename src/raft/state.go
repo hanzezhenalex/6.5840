@@ -82,3 +82,17 @@ func (sm *StateManager) SyncStateFromAppendEntriesTask(task *AppendEntriesTask) 
 		sm.UpdateCommitted(task.args.LeaderLastCommitted)
 	}
 }
+
+func (sm *StateManager) Encode(encoder func(val interface{})) {
+	encoder(sm.term)
+	encoder(sm.committed)
+
+	sm.logMngr.Encode(encoder)
+}
+
+func (sm *StateManager) Recover(decoder func(p interface{})) {
+	decoder(&sm.term)
+	decoder(&sm.committed)
+
+	sm.logMngr.Recover(decoder)
+}

@@ -92,6 +92,7 @@ func (f *Follower) HandleRequestVotesTask(task *RequestVotesTask) {
 
 		f.resetTimer(logger)
 		f.worker.state.UpdateTerm(peerTerm)
+		f.worker.context.MarkStateChanged()
 	}
 }
 
@@ -109,6 +110,7 @@ func (f *Follower) HandleAppendEntriesTask(task *AppendEntriesTask) {
 	} else {
 		f.resetTimer(logger)
 		f.worker.state.SyncStateFromAppendEntriesTask(task)
+		f.worker.context.MarkStateChanged()
 	}
 }
 
