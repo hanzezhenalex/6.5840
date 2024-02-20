@@ -54,7 +54,7 @@ func (ls *LogService) AppendLogAndReturnNextIndex(
 			}
 			return false
 		}
-		return term == term
+		return term == targetTerm
 	}
 
 	if match(entry.Index, entry.Term) {
