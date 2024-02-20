@@ -120,26 +120,26 @@ func (ls *LogService) Recover(decoder func(p interface{})) {
 }
 
 type Storage struct {
-	logs     Logs
-	snapshot *Snapshot
+	Logs     Logs
+	Snapshot *Snapshot
 }
 
 func (st *Storage) GetLastLogTerm() int {
-	if len(st.logs) > 0 {
-		return st.logs[len(st.logs)-1].Term
+	if len(st.Logs) > 0 {
+		return st.Logs[len(st.Logs)-1].Term
 	}
-	if st.snapshot != nil {
-		return st.snapshot.LastLogTerm
+	if st.Snapshot != nil {
+		return st.Snapshot.LastLogTerm
 	}
 	return TermStartFrom
 }
 
 func (st *Storage) GetLastLogIndex() int {
-	if len(st.logs) > 0 {
-		return st.logs[len(st.logs)-1].Index
+	if len(st.Logs) > 0 {
+		return st.Logs[len(st.Logs)-1].Index
 	}
-	if st.snapshot != nil {
-		return st.snapshot.LastLogIndex
+	if st.Snapshot != nil {
+		return st.Snapshot.LastLogIndex
 	}
 	return EmptyLogIndex
 }
@@ -148,23 +148,23 @@ func (st *Storage) GetLogEntryByIndex(index int) (*LogEntry, error) {
 	if index < IndexStartFrom {
 		return nil, errorLogIndexBelowLowerBound
 	}
-	if st.snapshot != nil && st.snapshot.include(index) {
+	if st.Snapshot != nil && st.Snapshot.include(index) {
 		return nil, errorRetrieveEntryInSnapshot
 	}
-	return st.logs.find(index)
+	return st.Logs.find(index)
 }
 
 func (st *Storage) GetLogTermByIndex(index int) (int, error) {
 	if index < IndexStartFrom {
 		return TermStartFrom, errorLogIndexBelowLowerBound
 	}
-	if st.snapshot != nil && st.snapshot.include(index) {
-		if st.snapshot.LastLogIndex == index {
-			return st.snapshot.LastLogTerm, nil
+	if st.Snapshot != nil && st.Snapshot.include(index) {
+		if st.Snapshot.LastLogIndex == index {
+			return st.Snapshot.LastLogTerm, nil
 		}
 		return TermStartFrom, errorRetrieveEntryInSnapshot
 	}
-	entry, err := st.logs.find(index)
+	entry, err := st.Logs.find(index)
 	if err != nil {
 		return TermStartFrom, err
 	}
@@ -172,34 +172,34 @@ func (st *Storage) GetLogTermByIndex(index int) (int, error) {
 }
 
 func (st *Storage) AppendNewEntry(entry *LogEntry) {
-	st.logs = append(st.logs, entry)
+	st.Logs = append(st.Logs, entry)
 }
 
 func (st *Storage) RemoveEntriesAfterIndex(index int) error {
 	if index < IndexStartFrom {
 		return errorIllegalLogIndex
 	}
-	if st.snapshot != nil && st.snapshot.include(index) {
-		if st.snapshot.LastLogIndex == index {
-			st.logs.reset()
+	if st.Snapshot != nil && st.Snapshot.include(index) {
+		if st.Snapshot.LastLogIndex == index {
+			st.Logs.reset()
 			return nil
 		}
 		return errorTruncateLogsInSnapshot
 	}
-	st.logs.removeEntriesAfterIndex(index)
+	st.Logs.removeEntriesAfterIndex(index)
 	return nil
 }
 
 func (st *Storage) GetSnapshot() *Snapshot {
-	return st.snapshot
+	return st.Snapshot
 }
 
 func (st *Storage) SaveSnapshot(snapshot *Snapshot) error {
-	if st.snapshot != nil && st.snapshot.include(snapshot.LastLogIndex) {
+	if st.Snapshot != nil && st.Snapshot.include(snapshot.LastLogIndex) {
 		return errorSnapshotExists
 	}
-	st.logs.removeEntriesBeforeIndex(snapshot.LastLogIndex + 1)
-	st.snapshot = snapshot
+	st.Logs.removeEntriesBeforeIndex(snapshot.LastLogIndex + 1)
+	st.Snapshot = snapshot
 	return nil
 }
 
