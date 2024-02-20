@@ -416,7 +416,7 @@ LOOP:
 
 	if oldLastCommitted != rf.lastApplied {
 		rf.logger.Info(
-			"log committed",
+			"logs committed",
 			zap.Int("old", oldLastCommitted),
 			zap.Int("current", rf.lastApplied),
 		)

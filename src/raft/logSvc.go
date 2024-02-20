@@ -44,6 +44,9 @@ func (ls *LogService) AppendLogAndReturnNextIndex(
 	}
 
 	match := func(logIndex int, targetTerm int) bool {
+		if logIndex < IndexStartFrom {
+			return true
+		}
 		term, err := ls.GetLogTermByIndex(logIndex)
 		if err != nil {
 			if err == errorRetrieveEntryInSnapshot {
