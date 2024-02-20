@@ -137,13 +137,13 @@ func (l *Leader) UpdateCommittedIndex() {
 	})
 
 	if tryToCommit := int(committed[len(committed)/2]); tryToCommit >= IndexStartFrom {
-		log, err := l.worker.state.logMngr.GetLogEntryByIndex(tryToCommit)
+		term, err := l.worker.state.logMngr.GetLogTermByIndex(tryToCommit)
 		if err != nil {
 			panic(err)
 		}
 
 		// only commit logs in this term
-		if log.Term == l.term && l.worker.state.UpdateCommitted(tryToCommit) {
+		if term == l.term && l.worker.state.UpdateCommitted(tryToCommit) {
 			l.UpdateReplicatorState()
 		}
 	}
@@ -249,7 +249,11 @@ func (rp *replicator) syncLogsWithPeer() {
 		)
 		rp.nextIndex = reply.ExpectedNextIndex
 		if reply.Success {
-			atomic.StoreInt32(&rp.replicated, int32(args.Logs.Index))
+			if args.Logs != nil {
+				atomic.StoreInt32(&rp.replicated, int32(args.Logs.Index))
+			} else {
+				atomic.StoreInt32(&rp.replicated, int32(args.Snapshot.LastLogIndex))
+			}
 		}
 		if reply.Term > rp.term {
 			continueSending = false

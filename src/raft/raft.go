@@ -183,7 +183,11 @@ func (rf *Raft) persist() {
 	rf.state.Encode(encodeOrPanic)
 
 	state := w.Bytes()
-	rf.persister.Save(state, nil)
+	if rf.state.logMngr.Snapshot != nil {
+		rf.persister.Save(state, rf.state.logMngr.Snapshot.Data)
+	} else {
+		rf.persister.Save(state, nil)
+	}
 	rf.logger.Debug("state persisted")
 }
 
@@ -213,20 +217,18 @@ func (rf *Raft) readPersist(data []byte) {
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	task := &BuildSnapshotTask{index, snapshot, sync.WaitGroup{}}
-	task.wg.Add(1)
-	rf.buildSnapshotCh <- task
-	task.wg.Wait()
+	go func() {
+		task := &BuildSnapshotTask{index: index, data: snapshot}
+		rf.buildSnapshotCh <- task
+	}()
 }
 
 type BuildSnapshotTask struct {
 	index int
 	data  []byte
-	wg    sync.WaitGroup
 }
 
 func (rf *Raft) handleBuildSnapshotTask(task *BuildSnapshotTask) {
-	defer task.wg.Done()
 	if err := rf.state.logMngr.BuildSnapshot(
 		rf.state.GetCurrentTerm(), task.index, task.data); err != nil {
 		if err == errorSnapshotExists {
@@ -257,11 +259,14 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 
 	task.wg.Wait()
-	rf.logger.Info(
-		"store new command",
-		zap.Bool("success", task.Success),
-		zap.String("command", fmt.Sprintf("%#v", log)),
-	)
+	if task.Success {
+		rf.logger.Info(
+			"new command stored",
+			zap.Int(Term, log.Term),
+			zap.Int("index", log.Index),
+			zap.String("command", fmt.Sprintf("%#v", log)),
+		)
+	}
 	return log.Index, log.Term, task.Success
 }
 
@@ -335,7 +340,7 @@ func (rf *Raft) handleAppendEntriesTask(task *AppendEntriesTask) {
 }
 
 func (rf *Raft) daemon() {
-	rf.logger.Info("daemon started")
+	rf.logger.Info("raft daemon started")
 	go rf.role.StartDaemon()
 
 LOOP:
@@ -366,6 +371,7 @@ LOOP:
 	}
 
 	rf.role.StopDaemon()
+	rf.logger.Info("raft daemon stopped")
 }
 
 func (rf *Raft) apply() {
@@ -405,6 +411,10 @@ LOOP:
 				panic(err)
 			}
 		} else {
+			rf.logger.Debug(
+				"start to apply msg",
+				zap.Int("index", log.Index),
+			)
 			rf.applyMsgCh <- ApplyMsg{
 				Command:      log.Command,
 				CommandValid: true,

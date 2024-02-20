@@ -639,7 +639,7 @@ func (cfg *config) end() {
 func (cfg *config) LogSize() int {
 	logsize := 0
 	for i := 0; i < cfg.n; i++ {
-		n := cfg.saved[i].RaftStateSize()
+		n := cfg.saved[i].RaftStateSize() - cfg.saved[i].SnapshotSize()
 		if n > logsize {
 			logsize = n
 		}
