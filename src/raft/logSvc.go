@@ -111,6 +111,14 @@ func (ls *LogService) BuildSnapshot(term int, index int, data []byte) error {
 	})
 }
 
+func (ls *LogService) Encode(encoder func(val interface{})) {
+	encoder(ls.Storage)
+}
+
+func (ls *LogService) Recover(decoder func(p interface{})) {
+	decoder(&ls.Storage)
+}
+
 type Storage struct {
 	logs     Logs
 	snapshot *Snapshot
@@ -193,16 +201,6 @@ func (st *Storage) SaveSnapshot(snapshot *Snapshot) error {
 	st.logs.removeEntriesBeforeIndex(snapshot.LastLogIndex + 1)
 	st.snapshot = snapshot
 	return nil
-}
-
-func (st *Storage) Encode(encoder func(val interface{})) {
-	encoder(st.logs)
-	encoder(*st.snapshot)
-}
-
-func (st *Storage) Recover(decoder func(p interface{})) {
-	decoder(&st.logs)
-	decoder(st.snapshot)
 }
 
 type Logs []*LogEntry // Do not need to consider lower limit
