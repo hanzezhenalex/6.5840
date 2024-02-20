@@ -38,6 +38,10 @@ func (ls *LogService) CreateReadOnlyReplicate() *LogService {
 
 func (ls *LogService) AppendLogAndReturnNextIndex(
 	lastLogIndex, lastLogTerm int, entry *LogEntry) (int, bool) {
+	if entry == nil { // heartbeat
+		ls.logger.Debug("receive heartbeat")
+		return ls.GetLastLogIndex() + 1, false
+	}
 
 	match := func(logIndex int, targetTerm int) bool {
 		term, err := ls.GetLogTermByIndex(logIndex)
