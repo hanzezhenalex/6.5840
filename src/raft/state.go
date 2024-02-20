@@ -3,14 +3,14 @@ package raft
 type StateManager struct {
 	committed int
 	term      int
-	logMngr   *LogManager
+	logMngr   *LogService
 }
 
 func (sm *StateManager) New() *StateManager {
 	return &StateManager{
 		committed: sm.committed,
 		term:      sm.term,
-		logMngr:   sm.logMngr.New(),
+		logMngr:   sm.logMngr.CreateReadOnlyReplicate(),
 	}
 }
 
@@ -66,14 +66,22 @@ func (sm *StateManager) SyncStateFromAppendEntriesTask(task *AppendEntriesTask) 
 		sm.UpdateTerm(peerTerm)
 	}
 
-	nextIndex, logAppended := sm.logMngr.AppendLogAndReturnNextIndex(
-		task.args.LastLogIndex,
-		task.args.LastLogTerm,
-		task.args.Logs,
-	)
+	var nextIndex int
+	var appended bool
+
+	if task.args.Snapshot != nil {
+		nextIndex, appended = sm.logMngr.AppendSnapshotAndReturnNextIndex(task.args.Snapshot)
+	} else {
+		nextIndex, appended = sm.logMngr.AppendLogAndReturnNextIndex(
+			task.args.LastLogIndex,
+			task.args.LastLogTerm,
+			task.args.Logs,
+		)
+	}
+
 	// peer needs these for committing and deciding next log to send
 	task.reply.ExpectedNextIndex = nextIndex
-	task.reply.Success = logAppended
+	task.reply.Success = appended
 	task.reply.Term = sm.GetCurrentTerm()
 
 	if task.reply.Success || task.args.Logs == nil {

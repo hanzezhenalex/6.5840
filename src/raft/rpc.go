@@ -26,6 +26,7 @@ type AppendEntryArgs struct {
 	LastLogTerm  int
 	LastLogIndex int
 	Logs         *LogEntry
+	Snapshot     *Snapshot
 }
 
 type AppendEntryReply struct {

@@ -1,0 +1,266 @@
+package raft
+
+import (
+	"errors"
+	"fmt"
+
+	"go.uber.org/zap"
+)
+
+const (
+	TermStartFrom  = 0
+	EmptyLogIndex  = 0
+	IndexStartFrom = 1
+)
+
+type LogEntry struct {
+	Term    int
+	Index   int
+	Command interface{}
+}
+
+type LogService struct {
+	Storage
+	logger *zap.Logger
+}
+
+func NewLogService(me int) *LogService {
+	return &LogService{
+		logger: GetLoggerOrPanic("log service").With(zap.Int(Index, me)),
+	}
+}
+
+func (ls *LogService) CreateReadOnlyReplicate() *LogService {
+	newLs := new(LogService)
+	*newLs = *ls
+	return ls
+}
+
+func (ls *LogService) AppendLogAndReturnNextIndex(
+	lastLogIndex, lastLogTerm int, entry *LogEntry) (int, bool) {
+
+	match := func(logIndex int, targetTerm int) bool {
+		term, err := ls.GetLogTermByIndex(logIndex)
+		if err != nil {
+			if err == errorRetrieveEntryInSnapshot {
+				panic(err)
+			}
+			return false
+		}
+		return term == term
+	}
+
+	if match(entry.Index, entry.Term) {
+		ls.logger.Debug("log matched, want next")
+		return entry.Index + 1, false
+	} else if match(lastLogIndex, lastLogTerm) {
+		ls.logger.Debug(
+			"last log matched, append",
+			zap.String("log", fmt.Sprintf("%#v", entry)),
+		)
+		_ = ls.RemoveEntriesAfterIndex(lastLogIndex)
+		ls.AppendNewEntry(entry)
+		return entry.Index + 1, true
+	} else {
+		ls.logger.Debug("no log matched, try older")
+		return lastLogIndex, false
+	}
+}
+
+func (ls *LogService) AppendSnapshotAndReturnNextIndex(snapshot *Snapshot) (int, bool) {
+	if err := ls.SaveSnapshot(snapshot); err != nil {
+		if err == errorSnapshotExists {
+			ls.logger.Debug("snapshot exists, request next index")
+		}
+		return snapshot.LastLogIndex + 1, false
+	}
+	return snapshot.LastLogIndex + 1, true
+}
+
+func (ls *LogService) AppendNewCommand(term int, command interface{}) *LogEntry {
+	ls.logger.Debug(
+		"store new command",
+		zap.String("command", fmt.Sprintf("%#v", command)),
+	)
+	entry := &LogEntry{
+		Term:    term,
+		Index:   ls.GetLastLogIndex() + 1,
+		Command: command,
+	}
+	ls.AppendNewEntry(entry)
+	return entry
+}
+
+func (ls *LogService) BuildSnapshot(term int, index int, data []byte) error {
+	ls.logger.Debug(
+		"build snapshot",
+		zap.Int("endAt", index),
+		zap.Int(Term, term),
+	)
+	term, err := ls.GetLogTermByIndex(index)
+	if err != nil {
+		if err == errorRetrieveEntryInSnapshot {
+			return errorSnapshotExists
+		}
+	}
+	return ls.SaveSnapshot(&Snapshot{
+		BuildTerm:    term,
+		LastLogIndex: index,
+		LastLogTerm:  term,
+		Data:         data,
+	})
+}
+
+type Storage struct {
+	logs     Logs
+	snapshot *Snapshot
+}
+
+func (st *Storage) GetLastLogTerm() int {
+	if len(st.logs) > 0 {
+		return st.logs[len(st.logs)-1].Term
+	}
+	if st.snapshot != nil {
+		return st.snapshot.LastLogTerm
+	}
+	return TermStartFrom
+}
+
+func (st *Storage) GetLastLogIndex() int {
+	if len(st.logs) > 0 {
+		return st.logs[len(st.logs)-1].Index
+	}
+	if st.snapshot != nil {
+		return st.snapshot.LastLogIndex
+	}
+	return EmptyLogIndex
+}
+
+func (st *Storage) GetLogEntryByIndex(index int) (*LogEntry, error) {
+	if index < IndexStartFrom {
+		return nil, errorLogIndexBelowLowerBound
+	}
+	if st.snapshot != nil && st.snapshot.include(index) {
+		return nil, errorRetrieveEntryInSnapshot
+	}
+	return st.logs.find(index)
+}
+
+func (st *Storage) GetLogTermByIndex(index int) (int, error) {
+	if index < IndexStartFrom {
+		return TermStartFrom, errorLogIndexBelowLowerBound
+	}
+	if st.snapshot != nil && st.snapshot.include(index) {
+		if st.snapshot.LastLogIndex == index {
+			return st.snapshot.LastLogTerm, nil
+		}
+		return TermStartFrom, errorRetrieveEntryInSnapshot
+	}
+	entry, err := st.logs.find(index)
+	if err != nil {
+		return TermStartFrom, err
+	}
+	return entry.Term, nil
+}
+
+func (st *Storage) AppendNewEntry(entry *LogEntry) {
+	st.logs = append(st.logs, entry)
+}
+
+func (st *Storage) RemoveEntriesAfterIndex(index int) error {
+	if index < IndexStartFrom {
+		return errorIllegalLogIndex
+	}
+	if st.snapshot != nil && st.snapshot.include(index) {
+		if st.snapshot.LastLogIndex == index {
+			st.logs.reset()
+			return nil
+		}
+		return errorTruncateLogsInSnapshot
+	}
+	st.logs.removeEntriesAfterIndex(index)
+	return nil
+}
+
+func (st *Storage) GetSnapshot() *Snapshot {
+	return st.snapshot
+}
+
+func (st *Storage) SaveSnapshot(snapshot *Snapshot) error {
+	if st.snapshot != nil && st.snapshot.include(snapshot.LastLogIndex) {
+		return errorSnapshotExists
+	}
+	st.logs.removeEntriesBeforeIndex(snapshot.LastLogIndex + 1)
+	st.snapshot = snapshot
+	return nil
+}
+
+func (st *Storage) Encode(encoder func(val interface{})) {
+	encoder(st.logs)
+	encoder(*st.snapshot)
+}
+
+func (st *Storage) Recover(decoder func(p interface{})) {
+	decoder(&st.logs)
+	decoder(st.snapshot)
+}
+
+type Logs []*LogEntry // Do not need to consider lower limit
+
+func (logs Logs) find(index int) (*LogEntry, error) {
+	if len(logs) == 0 {
+		return nil, errorLogIndexExceedUpperLimit
+	}
+
+	start, end := logs.getStartAndEndIndex()
+	if index > end {
+		return nil, errorLogIndexExceedUpperLimit
+	}
+	return logs[index-start], nil
+}
+
+func (logs *Logs) reset() {
+	*logs = (*logs)[:0]
+}
+
+func (logs Logs) getStartAndEndIndex() (int, int) {
+	return logs[0].Index, logs[len(logs)-1].Index
+}
+
+func (logs *Logs) removeEntriesAfterIndex(index int) {
+	start, end := logs.getStartAndEndIndex()
+
+	if index < end {
+		*logs = (*logs)[:index-start+1]
+	}
+}
+
+func (logs *Logs) removeEntriesBeforeIndex(index int) {
+	start, end := logs.getStartAndEndIndex()
+
+	if index > end {
+		logs.reset()
+	} else {
+		*logs = (*logs)[index-start:]
+	}
+}
+
+type Snapshot struct {
+	BuildTerm    int
+	LastLogIndex int
+	LastLogTerm  int
+	Data         []byte
+}
+
+func (sp *Snapshot) include(index int) bool {
+	return sp.LastLogIndex >= index
+}
+
+var (
+	errorIllegalLogIndex          = errors.New("errorIllegalLogIndex")
+	errorLogIndexExceedUpperLimit = errors.New("errorLogIndexExceedUpperLimit")
+	errorLogIndexBelowLowerBound  = errors.New("errorLogIndexBelowLowerBound")
+	errorRetrieveEntryInSnapshot  = errors.New("errorRetrieveEntryInSnapshot")
+	errorTruncateLogsInSnapshot   = errors.New("errorTruncateLogsInSnapshot")
+	errorSnapshotExists           = errors.New("errorSnapshotExists")
+)
