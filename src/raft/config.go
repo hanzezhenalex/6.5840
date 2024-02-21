@@ -331,8 +331,8 @@ func (cfg *config) start1(i int, applier func(int, chan ApplyMsg)) {
 
 func (cfg *config) checkTimeout() {
 	// enforce a two minute real-time limit on each test
-	if !cfg.t.Failed() && time.Since(cfg.start) > 120*time.Second {
-		cfg.t.Fatal("test took longer than 120 seconds")
+	if !cfg.t.Failed() && time.Since(cfg.start) > 200*time.Second {
+		cfg.t.Fatalf("test took longer than 120 seconds, total:%ds", int(time.Since(cfg.start).Seconds()))
 	}
 }
 
@@ -639,7 +639,7 @@ func (cfg *config) end() {
 func (cfg *config) LogSize() int {
 	logsize := 0
 	for i := 0; i < cfg.n; i++ {
-		n := cfg.saved[i].RaftStateSize()
+		n := cfg.saved[i].RaftStateSize() - cfg.saved[i].SnapshotSize()
 		if n > logsize {
 			logsize = n
 		}

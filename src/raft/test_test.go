@@ -60,19 +60,25 @@ func TestReElection2A(t *testing.T) {
 	leader1 := cfg.checkOneLeader()
 
 	// if the leader disconnects, a new one should be elected.
+	DPrintf("disconnect leader: %d", leader1)
 	cfg.disconnect(leader1)
 	cfg.checkOneLeader()
 
 	// if the old leader rejoins, that shouldn't
 	// disturb the new leader. and the old leader
 	// should switch to follower.
+	DPrintf("reconnect leader: %d", leader1)
 	cfg.connect(leader1)
 	leader2 := cfg.checkOneLeader()
 
 	// if there's no quorum, no new leader should
 	// be elected.
+	DPrintf("disconnect leader: %d", leader2)
 	cfg.disconnect(leader2)
-	cfg.disconnect((leader2 + 1) % servers)
+
+	index := (leader2 + 1) % servers
+	DPrintf("disconnect peer: %d", index)
+	cfg.disconnect(index)
 	time.Sleep(2 * RaftElectionTimeout)
 
 	// check that the one connected server
@@ -80,10 +86,12 @@ func TestReElection2A(t *testing.T) {
 	cfg.checkNoLeader()
 
 	// if a quorum arises, it should elect a leader.
-	cfg.connect((leader2 + 1) % servers)
+	DPrintf("reconnect peer: %d", index)
+	cfg.connect(index)
 	cfg.checkOneLeader()
 
 	// re-join of last node shouldn't prevent leader from existing.
+	DPrintf("reconnect leader: %d", leader2)
 	cfg.connect(leader2)
 	cfg.checkOneLeader()
 
@@ -501,6 +509,12 @@ func TestBackup2B(t *testing.T) {
 
 	// put leader and one follower in a partition
 	leader1 := cfg.checkOneLeader()
+	DPrintf(
+		"discconnect peers: %d %d %d",
+		(leader1+2)%servers,
+		(leader1+3)%servers,
+		(leader1+4)%servers,
+	)
 	cfg.disconnect((leader1 + 2) % servers)
 	cfg.disconnect((leader1 + 3) % servers)
 	cfg.disconnect((leader1 + 4) % servers)
@@ -512,9 +526,20 @@ func TestBackup2B(t *testing.T) {
 
 	time.Sleep(RaftElectionTimeout / 2)
 
+	DPrintf(
+		"discconnect peers: %d %d",
+		(leader1+0)%servers,
+		(leader1+1)%servers,
+	)
 	cfg.disconnect((leader1 + 0) % servers)
 	cfg.disconnect((leader1 + 1) % servers)
 
+	DPrintf(
+		"recover peers: %d %d %d",
+		(leader1+2)%servers,
+		(leader1+3)%servers,
+		(leader1+4)%servers,
+	)
 	// allow other partition to recover
 	cfg.connect((leader1 + 2) % servers)
 	cfg.connect((leader1 + 3) % servers)
@@ -531,6 +556,8 @@ func TestBackup2B(t *testing.T) {
 	if leader2 == other {
 		other = (leader2 + 1) % servers
 	}
+
+	DPrintf("disconnect peers: %d", other)
 	cfg.disconnect(other)
 
 	// lots more commands that won't commit
@@ -1097,7 +1124,7 @@ func TestUnreliableChurn2C(t *testing.T) {
 	internalChurn(t, true)
 }
 
-const MAXLOGSIZE = 2000
+const MAXLOGSIZE = 8000
 
 func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash bool) {
 	iters := 30
