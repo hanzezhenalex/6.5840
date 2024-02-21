@@ -183,8 +183,13 @@ func (st *Storage) AppendNewEntry(entry *LogEntry) {
 }
 
 func (st *Storage) RemoveEntriesAfterIndex(index int) error {
-	if index < IndexStartFrom {
+	if index < EmptyLogIndex {
 		return errorIllegalLogIndex
+	}
+	if index == EmptyLogIndex {
+		st.Logs.reset()
+		st.Snapshot = nil
+		return nil
 	}
 	if st.Snapshot != nil && st.Snapshot.include(index) {
 		if st.Snapshot.LastLogIndex == index {
@@ -205,7 +210,9 @@ func (st *Storage) SaveSnapshot(snapshot *Snapshot) error {
 	if st.Snapshot != nil && st.Snapshot.include(snapshot.LastLogIndex) {
 		return errorSnapshotExists
 	}
-	st.Logs.removeEntriesBeforeIndex(snapshot.LastLogIndex + 1)
+	if len(st.Logs) == 0 {
+		st.Logs.removeEntriesBeforeIndex(snapshot.LastLogIndex + 1)
+	}
 	st.Snapshot = snapshot
 	return nil
 }
