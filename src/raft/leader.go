@@ -137,13 +137,13 @@ func (l *Leader) UpdateCommittedIndex() {
 	})
 
 	if tryToCommit := int(committed[len(committed)/2]); tryToCommit >= IndexStartFrom {
-		log, err := l.worker.state.logMngr.GetLogByIndex(tryToCommit)
+		term, err := l.worker.state.logMngr.GetLogTermByIndex(tryToCommit)
 		if err != nil {
 			panic(err)
 		}
 
 		// only commit logs in this term
-		if log.Term == l.term && l.worker.state.UpdateCommitted(tryToCommit) {
+		if term == l.term && l.worker.state.UpdateCommitted(tryToCommit) {
 			l.UpdateReplicatorState()
 		}
 	}
@@ -249,7 +249,11 @@ func (rp *replicator) syncLogsWithPeer() {
 		)
 		rp.nextIndex = reply.ExpectedNextIndex
 		if reply.Success {
-			atomic.StoreInt32(&rp.replicated, int32(args.Logs.Index))
+			if args.Logs != nil {
+				atomic.StoreInt32(&rp.replicated, int32(args.Logs.Index))
+			} else {
+				atomic.StoreInt32(&rp.replicated, int32(args.Snapshot.LastLogIndex))
+			}
 		}
 		if reply.Term > rp.term {
 			continueSending = false
@@ -267,21 +271,26 @@ func (rp *replicator) fillAppendEntriesArgs() (AppendEntryArgs, bool) {
 		LeaderLastLogTerm:   stateMngr.logMngr.GetLastLogTerm(),
 	}
 
-	expectedLog, err := stateMngr.logMngr.GetLogByIndex(rp.nextIndex)
-	if err == errorLogIndexOutOfRange {
+	expectedLog, err := stateMngr.logMngr.GetLogEntryByIndex(rp.nextIndex)
+	if err == errorLogIndexExceedUpperLimit {
 		rp.logger.Info("all logs replicated to peer, heartbeat only")
 		return args, false
 	}
-	args.Logs = expectedLog
+	if err == errorRetrieveEntryInSnapshot {
+		rp.logger.Info("sync snapshot to peer")
+		args.Snapshot = stateMngr.logMngr.GetSnapshot()
+		return args, true
+	}
 
+	args.Logs = expectedLog
 	if previous := rp.nextIndex - 1; previous >= IndexStartFrom {
-		previousLog, err := stateMngr.logMngr.GetLogByIndex(previous)
-		if err == errorLogIndexOutOfRange {
+		term, err := stateMngr.logMngr.GetLogTermByIndex(previous)
+		if err != nil {
 			panic(fmt.Sprintf("previous log index should not out of range, index=%d", previous))
 		}
 
-		args.LastLogIndex = previousLog.Index
-		args.LastLogTerm = previousLog.Term
+		args.LastLogIndex = previous
+		args.LastLogTerm = term
 	} else {
 		args.LastLogIndex = EmptyLogIndex
 		args.LastLogTerm = -1

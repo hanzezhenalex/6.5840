@@ -277,7 +277,7 @@ func (rn *Network) processReq(req reqMsg) {
 			req.replyCh <- replyMsg{false, nil}
 		} else if longreordering == true && rand.Intn(900) < 600 {
 			// delay the response for a while
-			ms := 200 + rand.Intn(1+rand.Intn(2000))
+			ms := 20 + rand.Intn(1+rand.Intn(200))
 			// Russ points out that this timer arrangement will decrease
 			// the number of goroutines, so that the race
 			// detector is less likely to get upset.

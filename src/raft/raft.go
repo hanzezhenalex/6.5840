@@ -95,7 +95,6 @@ type Raft struct {
 	logger *zap.Logger
 
 	peers             []*labrpc.ClientEnd // RPC end points of all peers
-	timeout           time.Duration
 	heartBeatInterval time.Duration
 
 	stopCh            chan struct{}
@@ -105,6 +104,7 @@ type Raft struct {
 	storeNewCommandCh chan *StoreNewCommandTask
 	notifyCh          chan struct{}
 	commitTicker      *time.Ticker
+	buildSnapshotCh   chan *BuildSnapshotTask
 
 	lastApplied int
 	applyMsgCh  chan ApplyMsg
@@ -120,12 +120,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		state: &StateManager{
 			committed: EmptyLogIndex,
 			term:      TermStartFrom,
-			logMngr:   NewLogManager(me),
+			logMngr:   NewLogService(me),
 		},
 		peers: peers,
 		logger: GetLoggerOrPanic("raft").
 			With(zap.Int(Index, me)),
-		timeout:           time.Duration(150+(rand.Int63()%150)) * time.Millisecond,
 		heartBeatInterval: time.Duration(100) * time.Millisecond,
 		persister:         persistent,
 
@@ -136,6 +135,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		storeNewCommandCh: make(chan *StoreNewCommandTask),
 		notifyCh:          make(chan struct{}),
 		commitTicker:      time.NewTicker(200 * time.Millisecond),
+		buildSnapshotCh:   make(chan *BuildSnapshotTask),
 
 		applyMsgCh:  applyCh,
 		lastApplied: EmptyLogIndex,
@@ -148,6 +148,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	go worker.daemon()
 	return worker
+}
+
+func (rf *Raft) Timeout() time.Duration {
+	return time.Duration(150+(rand.Int63()%150)) * time.Millisecond
 }
 
 func (rf *Raft) GetState() (int, bool) {
@@ -177,11 +181,14 @@ func (rf *Raft) persist() {
 		}
 	}
 	// store state
-	encodeOrPanic(rf.lastApplied)
 	rf.state.Encode(encodeOrPanic)
 
 	state := w.Bytes()
-	rf.persister.Save(state, nil)
+	if rf.state.logMngr.Snapshot != nil {
+		rf.persister.Save(state, rf.state.logMngr.Snapshot.Data)
+	} else {
+		rf.persister.Save(state, nil)
+	}
 	rf.logger.Debug("state persisted")
 }
 
@@ -202,7 +209,6 @@ func (rf *Raft) readPersist(data []byte) {
 		}
 	}
 
-	recoverOrPanic(&rf.lastApplied)
 	rf.state.Recover(recoverOrPanic)
 }
 
@@ -211,8 +217,28 @@ func (rf *Raft) readPersist(data []byte) {
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (2D).
+	go func() {
+		task := &BuildSnapshotTask{index: index, data: snapshot}
+		rf.buildSnapshotCh <- task
+	}()
+}
 
+type BuildSnapshotTask struct {
+	index int
+	data  []byte
+}
+
+func (rf *Raft) handleBuildSnapshotTask(task *BuildSnapshotTask) {
+	if err := rf.state.logMngr.BuildSnapshot(
+		rf.state.GetCurrentTerm(), task.index, task.data); err != nil {
+		if err == errorSnapshotExists {
+			rf.logger.Debug("snapshot exists")
+		} else {
+			panic(err)
+		}
+	} else {
+		rf.context.MarkStateChanged()
+	}
 }
 
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
@@ -233,11 +259,14 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 
 	task.wg.Wait()
-	rf.logger.Info(
-		"store new command",
-		zap.Bool("success", task.Success),
-		zap.String("command", fmt.Sprintf("%#v", log)),
-	)
+	if task.Success {
+		rf.logger.Info(
+			"new command stored",
+			zap.Int(Term, log.Term),
+			zap.Int("index", log.Index),
+			zap.String("command", fmt.Sprintf("%#v", log)),
+		)
+	}
 	return log.Index, log.Term, task.Success
 }
 
@@ -253,7 +282,7 @@ func (rf *Raft) handleStoreNewCommandTask(task *StoreNewCommandTask) {
 	defer task.wg.Done()
 
 	if rf.role.Type() == RoleLeader {
-		rf.state.logMngr.AppendNewLog(rf.state.GetCurrentTerm(), task.Log.Command)
+		rf.state.logMngr.AppendNewCommand(rf.state.GetCurrentTerm(), task.Log.Command)
 		rf.role.(*Leader).UpdateReplicatorState()
 
 		task.Log.Term = rf.state.GetCurrentTerm()
@@ -311,7 +340,7 @@ func (rf *Raft) handleAppendEntriesTask(task *AppendEntriesTask) {
 }
 
 func (rf *Raft) daemon() {
-	rf.logger.Info("daemon started")
+	rf.logger.Info("raft daemon started")
 	go rf.role.StartDaemon()
 
 LOOP:
@@ -331,6 +360,8 @@ LOOP:
 			rf.handleStoreNewCommandTask(task)
 		case <-rf.commitTicker.C:
 			rf.apply()
+		case task := <-rf.buildSnapshotCh:
+			rf.handleBuildSnapshotTask(task)
 		}
 
 		if rf.context.StateChanged() {
@@ -340,6 +371,7 @@ LOOP:
 	}
 
 	rf.role.StopDaemon()
+	rf.logger.Info("raft daemon stopped")
 }
 
 func (rf *Raft) apply() {
@@ -351,29 +383,50 @@ func (rf *Raft) apply() {
 
 LOOP:
 	for i := rf.lastApplied + 1; i <= rf.state.committed; i++ {
-		log, err := rf.state.logMngr.GetLogByIndex(i)
+		log, err := rf.state.logMngr.GetLogEntryByIndex(i)
 		if err != nil {
-			if err == errorLogIndexOutOfRange {
+			if err == errorLogIndexExceedUpperLimit {
 				rf.logger.Debug(
 					"committed is larger than existing",
 					zap.Int("i", i),
 					zap.Int("committed", rf.state.committed),
 				)
+				break LOOP
+			} else if err == errorRetrieveEntryInSnapshot {
+				sp := rf.state.logMngr.GetSnapshot()
+				rf.logger.Debug(
+					"commit snapshot",
+					zap.Int("snapshot index", sp.LastLogIndex),
+					zap.Int("committed", rf.state.committed),
+				)
+				rf.applyMsgCh <- ApplyMsg{
+					SnapshotValid: true,
+					SnapshotIndex: sp.LastLogIndex,
+					SnapshotTerm:  sp.LastLogTerm,
+					Snapshot:      sp.Data,
+				}
+				rf.lastApplied = sp.LastLogIndex
+				i = rf.lastApplied
+			} else {
+				panic(err)
 			}
-
-			break LOOP
+		} else {
+			rf.logger.Debug(
+				"start to apply msg",
+				zap.Int("index", log.Index),
+			)
+			rf.applyMsgCh <- ApplyMsg{
+				Command:      log.Command,
+				CommandValid: true,
+				CommandIndex: log.Index,
+			}
+			rf.lastApplied++
 		}
-		rf.applyMsgCh <- ApplyMsg{
-			Command:      log.Command,
-			CommandValid: true,
-			CommandIndex: log.Index,
-		}
-		rf.lastApplied++
 	}
 
 	if oldLastCommitted != rf.lastApplied {
 		rf.logger.Info(
-			"log committed",
+			"logs committed",
 			zap.Int("old", oldLastCommitted),
 			zap.Int("current", rf.lastApplied),
 		)

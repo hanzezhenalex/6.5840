@@ -15,21 +15,19 @@ const (
 type Follower struct {
 	worker *Raft
 
-	timer    *time.Timer
-	stopCh   chan struct{}
-	logger   *zap.Logger
-	interval time.Duration
+	timer  *time.Timer
+	stopCh chan struct{}
+	logger *zap.Logger
 
 	status int32
 }
 
 func NewFollower(worker *Raft) *Follower {
 	return &Follower{
-		worker:   worker,
-		stopCh:   make(chan struct{}),
-		timer:    time.NewTimer(worker.timeout),
-		interval: worker.timeout,
-		status:   working,
+		worker: worker,
+		stopCh: make(chan struct{}),
+		timer:  time.NewTimer(worker.Timeout()),
+		status: working,
 		logger: GetLoggerOrPanic("follower").
 			With(zap.Int(Index, worker.me)),
 	}
@@ -121,6 +119,6 @@ func (f *Follower) HandleNotify() {
 }
 
 func (f *Follower) resetTimer(logger *zap.Logger) {
-	logger.Debug("timer reset", zap.String("interval", f.interval.String()))
-	f.timer.Reset(f.interval)
+	logger.Debug("timer reset", zap.String("interval", f.worker.Timeout().String()))
+	f.timer.Reset(f.worker.Timeout())
 }
