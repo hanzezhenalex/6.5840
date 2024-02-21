@@ -95,7 +95,6 @@ type Raft struct {
 	logger *zap.Logger
 
 	peers             []*labrpc.ClientEnd // RPC end points of all peers
-	timeout           time.Duration
 	heartBeatInterval time.Duration
 
 	stopCh            chan struct{}
@@ -126,7 +125,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		peers: peers,
 		logger: GetLoggerOrPanic("raft").
 			With(zap.Int(Index, me)),
-		timeout:           time.Duration(150+(rand.Int63()%150)) * time.Millisecond,
 		heartBeatInterval: time.Duration(100) * time.Millisecond,
 		persister:         persistent,
 
@@ -150,6 +148,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	go worker.daemon()
 	return worker
+}
+
+func (rf *Raft) Timeout() time.Duration {
+	return time.Duration(150+(rand.Int63()%150)) * time.Millisecond
 }
 
 func (rf *Raft) GetState() (int, bool) {
@@ -210,6 +212,17 @@ func (rf *Raft) readPersist(data []byte) {
 
 	recoverOrPanic(&rf.lastApplied)
 	rf.state.Recover(recoverOrPanic)
+
+	// src/raft/config.go:305
+	// during recover, cfg ingests snapshot, setting lastApplied to index of last log in snapshot
+	// we also should start applying from this
+	if sp := rf.state.logMngr.GetSnapshot(); sp != nil {
+		rf.logger.Debug(
+			"snapshot exists, reset lastApplied",
+			zap.Int("lastApplied", sp.LastLogIndex),
+		)
+		rf.lastApplied = sp.LastLogIndex
+	}
 }
 
 // the service says it has created a snapshot that has

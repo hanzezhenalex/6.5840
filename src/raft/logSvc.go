@@ -26,6 +26,9 @@ type LogService struct {
 
 func NewLogService(me int) *LogService {
 	return &LogService{
+		Storage: Storage{
+			Snapshot: nil,
+		},
 		logger: GetLoggerOrPanic("log service").With(zap.Int(Index, me)),
 	}
 }
