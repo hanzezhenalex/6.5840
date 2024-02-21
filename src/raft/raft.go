@@ -181,7 +181,6 @@ func (rf *Raft) persist() {
 		}
 	}
 	// store state
-	encodeOrPanic(rf.lastApplied)
 	rf.state.Encode(encodeOrPanic)
 
 	state := w.Bytes()
@@ -210,19 +209,7 @@ func (rf *Raft) readPersist(data []byte) {
 		}
 	}
 
-	recoverOrPanic(&rf.lastApplied)
 	rf.state.Recover(recoverOrPanic)
-
-	// src/raft/config.go:305
-	// during recover, cfg ingests snapshot, setting lastApplied to index of last log in snapshot
-	// we also should start applying from this
-	if sp := rf.state.logMngr.GetSnapshot(); sp != nil {
-		rf.logger.Debug(
-			"snapshot exists, reset lastApplied",
-			zap.Int("lastApplied", sp.LastLogIndex),
-		)
-		rf.lastApplied = sp.LastLogIndex
-	}
 }
 
 // the service says it has created a snapshot that has

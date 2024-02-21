@@ -9,7 +9,7 @@ import (
 func GetBaseLogger() (*zap.Logger, error) {
 	cfg := zap.NewDevelopmentConfig()
 
-	if os.Getenv("MR_PROD") == "true" {
+	if os.Getenv("RAFT_PROD") == "true" {
 		cfg.Level = zap.NewAtomicLevelAt(zap.FatalLevel)
 	} else {
 		cfg.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
