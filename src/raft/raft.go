@@ -24,6 +24,7 @@ import (
 	"math/rand"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	//	"6.5840/labgob"
@@ -89,6 +90,7 @@ func (c *TaskContext) Reset() {
 type Raft struct {
 	persister *Persister // Object to hold this peer's persisted state
 	me        int        // this peer's index into peers[]
+	leader    int32
 	state     *StateManager
 
 	role   Role
@@ -116,7 +118,8 @@ type Raft struct {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persistent *Persister, applyCh chan ApplyMsg) *Raft {
 	worker := &Raft{
-		me: me,
+		me:     me,
+		leader: -1,
 		state: &StateManager{
 			committed: EmptyLogIndex,
 			term:      TermStartFrom,
@@ -371,6 +374,7 @@ LOOP:
 	}
 
 	rf.role.StopDaemon()
+	close(rf.applyMsgCh)
 	rf.logger.Info("raft daemon stopped")
 }
 
@@ -439,7 +443,7 @@ LOOP:
 	}
 }
 
-func (rf *Raft) become(role RoleType) {
+func (rf *Raft) become(role RoleType, leader int) {
 	if rf.role.Type() == role && rf.role.Type() != RoleCandidate {
 		panic(fmt.Errorf("can not transform to the same role, role=%s", role))
 	}
@@ -463,6 +467,7 @@ func (rf *Raft) become(role RoleType) {
 	}
 
 	go rf.role.StartDaemon()
+	rf.setLeader(leader)
 }
 
 func (rf *Raft) AppendEntries(args AppendEntryArgs, reply *AppendEntryReply) error {
@@ -498,6 +503,14 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) error
 func (rf *Raft) Notify(msg string) {
 	rf.logger.Debug("notify worker", zap.String("reason", msg))
 	go func() { rf.notifyCh <- struct{}{} }()
+}
+
+func (rf *Raft) setLeader(leader int) {
+	atomic.StoreInt32(&rf.leader, int32(leader))
+}
+
+func (rf *Raft) GetLeader() string {
+	return fmt.Sprintf("%d", atomic.LoadInt32(&rf.leader))
 }
 
 func handleTermBehindRequest(worker *Raft, reply *AppendEntryReply, logger *zap.Logger) {

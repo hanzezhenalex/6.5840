@@ -91,11 +91,11 @@ func (l *Leader) HandleRequestVotesTask(task *RequestVotesTask) {
 				zap.Int("peerLastLogIndex", task.args.LeaderLastLogIndex),
 				zap.Int("peerLastLogIndex", task.args.LeaderLastLogTerm),
 			)
-			l.worker.become(RoleCandidate)
+			l.worker.become(RoleCandidate, -1)
 			task.reply.VoteFor = false
 		} else {
 			logger.Debug("RequestVote granted")
-			l.worker.become(RoleFollower)
+			l.worker.become(RoleFollower, task.args.Me)
 			task.reply.VoteFor = true
 		}
 	}
@@ -116,7 +116,7 @@ func (l *Leader) HandleAppendEntriesTask(task *AppendEntriesTask) {
 		panic("two leaders in one term")
 	} else {
 		logger.Info("found new leader")
-		l.worker.become(RoleFollower)
+		l.worker.become(RoleFollower, task.args.Me)
 		l.worker.state.SyncStateFromAppendEntriesTask(task)
 		l.worker.context.MarkStateChanged()
 	}

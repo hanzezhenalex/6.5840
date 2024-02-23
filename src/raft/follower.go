@@ -109,12 +109,15 @@ func (f *Follower) HandleAppendEntriesTask(task *AppendEntriesTask) {
 		f.resetTimer(logger)
 		f.worker.state.SyncStateFromAppendEntriesTask(task)
 		f.worker.context.MarkStateChanged()
+		if task.args.Me != int(f.worker.leader) {
+			f.worker.setLeader(task.args.Me)
+		}
 	}
 }
 
 func (f *Follower) HandleNotify() {
 	if atomic.LoadInt32(&f.status) == timeout {
-		f.worker.become(RoleCandidate)
+		f.worker.become(RoleCandidate, -1)
 	}
 }
 

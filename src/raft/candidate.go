@@ -41,7 +41,7 @@ func NewCandidate(worker *Raft) *Candidate {
 
 func (c *Candidate) HandleNotify() {
 	if atomic.LoadInt32(&c.status) == electionSucceed {
-		c.worker.become(RoleLeader)
+		c.worker.become(RoleLeader, c.worker.me)
 	} else if atomic.CompareAndSwapInt32(&c.status, electionTimeout, inElection) {
 		c.worker.state.IncrTerm()
 		c.startNewSelection()
@@ -133,10 +133,10 @@ func (c *Candidate) HandleRequestVotesTask(task *RequestVotesTask) {
 				zap.Int("peerLastLogTerm", task.args.LeaderLastLogTerm),
 			)
 			task.reply.VoteFor = false
-			c.worker.become(RoleCandidate)
+			c.worker.become(RoleCandidate, -1)
 		} else {
 			logger.Debug("RequestVote granted")
-			c.worker.become(RoleFollower)
+			c.worker.become(RoleFollower, task.args.Me)
 			task.reply.VoteFor = true
 		}
 	}
@@ -156,7 +156,7 @@ func (c *Candidate) HandleAppendEntriesTask(task *AppendEntriesTask) {
 	} else {
 		c.worker.context.MarkStateChanged()
 		logger.Info("someone has won the election")
-		c.worker.become(RoleFollower)
+		c.worker.become(RoleFollower, task.args.Me)
 		c.worker.state.SyncStateFromAppendEntriesTask(task)
 	}
 }
