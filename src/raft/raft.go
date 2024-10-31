@@ -18,13 +18,15 @@ package raft
 //
 
 import (
-	"6.5840/labgob"
 	"bytes"
 	"fmt"
 	"math/rand"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"6.5840/labgob"
 
 	//	"6.5840/labgob"
 	"6.5840/labrpc"
@@ -111,6 +113,9 @@ type Raft struct {
 
 	// task specified
 	context *TaskContext
+
+	enablePushEmptyLogWhenBecomeLeader atomic.Bool
+	roleChangeHook                     RaftRoleChangeHook
 }
 
 func Make(peers []*labrpc.ClientEnd, me int,
@@ -134,20 +139,31 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		getStateCh:        make(chan *StateTask),
 		storeNewCommandCh: make(chan *StoreNewCommandTask),
 		notifyCh:          make(chan struct{}),
-		commitTicker:      time.NewTicker(200 * time.Millisecond),
+		commitTicker:      time.NewTicker(20 * time.Millisecond),
 		buildSnapshotCh:   make(chan *BuildSnapshotTask),
 
-		applyMsgCh:  applyCh,
-		lastApplied: EmptyLogIndex,
-		context:     &TaskContext{stateChanged: false},
+		applyMsgCh:     applyCh,
+		lastApplied:    EmptyLogIndex,
+		context:        &TaskContext{stateChanged: false},
+		roleChangeHook: nil,
 	}
 	worker.role = NewFollower(worker)
 
 	// initialize from state persisted before a crash
-	worker.readPersist(persistent.ReadRaftState())
+	worker.readPersist(persistent.ReadRaftState(), persistent.ReadSnapshot())
 
 	go worker.daemon()
 	return worker
+}
+
+func (rf *Raft) EnablePushEmptyLogWhenBecomeLeader() {
+	rf.enablePushEmptyLogWhenBecomeLeader.Store(true)
+}
+
+type RaftRoleChangeHook func(role RoleType)
+
+func (rf *Raft) SetRoleChangeHook(hook RaftRoleChangeHook) {
+	rf.roleChangeHook = hook
 }
 
 func (rf *Raft) Timeout() time.Duration {
@@ -185,7 +201,7 @@ func (rf *Raft) persist() {
 
 	state := w.Bytes()
 	if rf.state.logMngr.Snapshot != nil {
-		rf.persister.Save(state, rf.state.logMngr.Snapshot.Data)
+		rf.persister.Save(state, rf.state.logMngr.Snapshot.Serialize())
 	} else {
 		rf.persister.Save(state, nil)
 	}
@@ -193,7 +209,7 @@ func (rf *Raft) persist() {
 }
 
 // restore previously persisted state.
-func (rf *Raft) readPersist(data []byte) {
+func (rf *Raft) readPersist(data []byte, snapshot []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
@@ -210,25 +226,37 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 
 	rf.state.Recover(recoverOrPanic)
+	rf.state.logMngr.Snapshot = DeserializeSnapshotFromBuf(snapshot)
 }
 
 // the service says it has created a snapshot that has
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
-func (rf *Raft) Snapshot(index int, snapshot []byte) {
+func (rf *Raft) Snapshot(index int, snapshot []byte) *BuildSnapshotTask {
+	task := &BuildSnapshotTask{index: index, data: snapshot}
+	task.wg.Add(1)
 	go func() {
-		task := &BuildSnapshotTask{index: index, data: snapshot}
-		rf.buildSnapshotCh <- task
+		select {
+		case <-rf.stopCh:
+			task.wg.Done()
+		case rf.buildSnapshotCh <- task:
+			rf.logger.Debug("put snapshot task, sync")
+		}
 	}()
+
+	return task
 }
 
 type BuildSnapshotTask struct {
 	index int
 	data  []byte
+	wg    sync.WaitGroup
 }
 
 func (rf *Raft) handleBuildSnapshotTask(task *BuildSnapshotTask) {
+	defer task.wg.Done()
+
 	if err := rf.state.logMngr.BuildSnapshot(
 		rf.state.GetCurrentTerm(), task.index, task.data); err != nil {
 		if err == errorSnapshotExists {
@@ -457,9 +485,16 @@ func (rf *Raft) become(role RoleType) {
 		rf.role = NewFollower(rf)
 	case RoleLeader:
 		rf.role = NewLeader(rf)
+		if rf.enablePushEmptyLogWhenBecomeLeader.Load() {
+			rf.state.logMngr.AppendNewCommand(rf.state.GetCurrentTerm(), nil)
+		}
 	case RoleCandidate:
 		rf.state.IncrTerm()
 		rf.role = NewCandidate(rf)
+	}
+
+	if rf.roleChangeHook != nil {
+		rf.roleChangeHook(role)
 	}
 
 	go rf.role.StartDaemon()
